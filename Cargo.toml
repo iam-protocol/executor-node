@@ -1,0 +1,24 @@
+[package]
+name = "executor-node"
+version = "0.1.0"
+edition = "2021"
+description = "IAM Protocol executor node — relayer service for walletless verification"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-client = "2.2"
+solana-sdk = "2.2"
+borsh = { version = "1", features = ["derive"] }
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+thiserror = "2"
+rand = "0.8"
+bs58 = "0.5"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
