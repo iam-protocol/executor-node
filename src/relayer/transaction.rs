@@ -26,14 +26,17 @@ impl RelayerTransaction {
         proof_bytes: &[u8],
         public_inputs: &[[u8; 32]],
     ) -> Result<VerificationOutcome, AppError> {
-        // Generate random nonce
         let nonce: [u8; 32] = rand::random();
 
         let relayer = self.client.relayer_pubkey();
         let (challenge_pda, _) = pda::find_challenge_pda(&relayer, &nonce);
         let (verification_pda, _) = pda::find_verification_result_pda(&relayer, &nonce);
 
-        // Build batched transaction: create_challenge + verify_proof
+        tracing::info!(
+            nonce = %bs58::encode(&nonce).into_string(),
+            "Generated verification nonce"
+        );
+
         let ix1 = instructions::build_create_challenge(&relayer, &challenge_pda, &nonce);
         let ix2 = instructions::build_verify_proof(
             &relayer,
@@ -46,7 +49,11 @@ impl RelayerTransaction {
 
         let signature = self.client.send_verification_tx(vec![ix1, ix2]).await?;
 
-        // Read the VerificationResult PDA to check is_valid
+        tracing::info!(
+            signature = %signature,
+            "Verification transaction confirmed"
+        );
+
         let is_valid = match self.client.get_account_data(&verification_pda).await? {
             Some(data) => {
                 // is_valid is at byte offset 80: 8 (disc) + 32 (verifier) + 32 (proof_hash) + 8 (verified_at)
