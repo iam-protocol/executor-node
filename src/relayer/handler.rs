@@ -38,15 +38,15 @@ pub async fn verify_handler(
         )));
     }
 
-    if req.public_inputs.len() != 3 {
+    if req.public_inputs.len() != 4 {
         return Err(AppError::InvalidRequest(format!(
-            "public_inputs must have 3 elements, got {}",
+            "public_inputs must have 4 elements, got {}",
             req.public_inputs.len()
         )));
     }
 
     // Convert public inputs to fixed-size arrays
-    let mut inputs: [[u8; 32]; 3] = [[0u8; 32]; 3];
+    let mut inputs: [[u8; 32]; 4] = [[0u8; 32]; 4];
     for (i, pi) in req.public_inputs.iter().enumerate() {
         if pi.len() != 32 {
             return Err(AppError::InvalidRequest(format!(
