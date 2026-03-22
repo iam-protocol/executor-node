@@ -19,6 +19,9 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 thiserror = "2"
 rand = "0.8"
 bs58 = "0.5"
+governor = "0.8"
+dashmap = "6"
+futures-util = "0.3"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }
