@@ -1,12 +1,9 @@
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
-use std::str::FromStr;
+
+use super::pda;
 
 const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
-
-fn verifier_program_id() -> Pubkey {
-    Pubkey::from_str("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV").expect("valid pubkey")
-}
 
 // Anchor discriminators (from IDL)
 const CREATE_CHALLENGE_DISC: [u8; 8] = [170, 244, 47, 1, 1, 15, 173, 239];
@@ -24,7 +21,7 @@ pub fn build_create_challenge(
     data.extend_from_slice(nonce);
 
     Instruction {
-        program_id: verifier_program_id(),
+        program_id: pda::verifier_program_id(),
         accounts: vec![
             AccountMeta::new(*challenger, true),
             AccountMeta::new(*challenge_pda, false),
@@ -44,7 +41,8 @@ pub fn build_verify_proof(
     public_inputs: &[[u8; 32]],
     nonce: &[u8; 32],
 ) -> Instruction {
-    let mut data = Vec::new();
+    let capacity = 8 + 4 + proof_bytes.len() + 4 + public_inputs.len() * 32 + 32;
+    let mut data = Vec::with_capacity(capacity);
     data.extend_from_slice(&VERIFY_PROOF_DISC);
 
     // Borsh-serialize Vec<u8>: 4-byte little-endian length + raw bytes
@@ -63,7 +61,7 @@ pub fn build_verify_proof(
     data.extend_from_slice(nonce);
 
     Instruction {
-        program_id: verifier_program_id(),
+        program_id: pda::verifier_program_id(),
         accounts: vec![
             AccountMeta::new(*verifier, true),
             AccountMeta::new(*challenge_pda, false),
@@ -90,11 +88,11 @@ mod tests {
     fn verify_proof_data_has_correct_structure() {
         let pubkey = Pubkey::new_unique();
         let proof = vec![0u8; 256];
-        let inputs = [[0u8; 32]; 3];
+        let inputs = [[0u8; 32]; 4];
         let nonce = [0u8; 32];
         let ix = build_verify_proof(&pubkey, &pubkey, &pubkey, &proof, &inputs, &nonce);
-        // 8 disc + (4 + 256) proof + (4 + 96) inputs + 32 nonce = 400
-        assert_eq!(ix.data.len(), 400);
+        // 8 disc + (4 + 256) proof + (4 + 128) inputs + 32 nonce = 432
+        assert_eq!(ix.data.len(), 432);
     }
 
     #[test]
