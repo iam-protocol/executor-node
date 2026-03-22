@@ -1,18 +1,15 @@
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::error::AppError;
-use crate::relayer::transaction::RelayerTransaction;
+use crate::server::AppState;
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 pub struct VerifyRequest {
     pub proof_bytes: Vec<u8>,
     pub public_inputs: Vec<Vec<u8>>,
     pub commitment: Vec<u8>,
-    pub is_first_verification: bool,
 }
 
 #[derive(Serialize)]
@@ -23,14 +20,22 @@ pub struct VerifyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_quota: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 pub async fn verify_handler(
-    State(relayer_tx): State<Arc<RelayerTransaction>>,
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
-    // Validate input
+    let api_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("authenticated")
+        .to_string();
+
     if req.proof_bytes.len() != 256 {
         return Err(AppError::InvalidRequest(format!(
             "proof_bytes must be 256 bytes, got {}",
@@ -45,7 +50,6 @@ pub async fn verify_handler(
         )));
     }
 
-    // Convert public inputs to fixed-size arrays
     let mut inputs: [[u8; 32]; 4] = [[0u8; 32]; 4];
     for (i, pi) in req.public_inputs.iter().enumerate() {
         if pi.len() != 32 {
@@ -65,23 +69,36 @@ pub async fn verify_handler(
         )));
     }
 
-    // Submit verification
-    let outcome = relayer_tx
-        .submit_verification(&req.proof_bytes, &inputs)
-        .await?;
+    let remaining = state.tracker.check_and_deduct(&api_key)?;
+
+    tracing::info!(api_key = %api_key, "Submitting verification");
+
+    let outcome = match state.relayer_tx.submit_verification(&req.proof_bytes, &inputs).await {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            state.tracker.refund(&api_key);
+            tracing::error!(api_key = %api_key, error = %e, "Verification submission failed");
+            return Err(e);
+        }
+    };
+
+    tracing::info!(
+        api_key = %api_key,
+        signature = %outcome.signature,
+        verified = outcome.is_valid,
+        remaining_quota = remaining,
+        "Verification completed"
+    );
 
     Ok(Json(VerifyResponse {
         success: true,
         tx_signature: Some(outcome.signature),
         verified: Some(outcome.is_valid),
+        remaining_quota: Some(remaining),
         error: None,
     }))
 }
 
-pub async fn health_handler(
-    State(_relayer_tx): State<Arc<RelayerTransaction>>,
-) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-    }))
+pub async fn health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
 }
