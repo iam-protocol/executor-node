@@ -1,6 +1,8 @@
 mod auth;
 mod config;
 mod error;
+mod integrator;
+mod listener;
 mod relayer;
 mod server;
 mod solana;
@@ -9,6 +11,8 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
+use integrator::tracker::IntegratorTracker;
+use listener::event_monitor::EventMonitor;
 use relayer::transaction::RelayerTransaction;
 use server::{create_router, AppState};
 use solana::client::SolanaClient;
@@ -34,12 +38,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let relayer_tx = Arc::new(RelayerTransaction::new(solana_client));
 
+    // Initialize per-API-key rate limiter
+    let rate_limiter = Arc::new(auth::rate_limit::RateLimiter::new(
+        config.rate_limit_per_minute,
+    ));
+    tracing::info!(
+        requests_per_minute = config.rate_limit_per_minute,
+        "Rate limiter initialized"
+    );
+
+    // Initialize integrator quota tracker
+    let integrator_count = config.integrators.len();
+    let tracker = Arc::new(IntegratorTracker::new(config.integrators));
+    tracing::info!(
+        integrators = integrator_count,
+        "Integrator tracker initialized (in-memory, resets on restart)"
+    );
+
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
+        rate_limiter,
+        tracker,
     };
 
     let app = create_router(state);
+
+    // Spawn RPC event listener in background
+    let verifier_program_id = solana::pda::verifier_program_id();
+    let ws_url = config.ws_url;
+    tokio::spawn(async move {
+        let monitor = EventMonitor::new(&ws_url, verifier_program_id);
+        monitor.start().await;
+    });
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!(addr = %config.listen_addr, "Executor node started");
