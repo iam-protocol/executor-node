@@ -1,40 +1,36 @@
-#![allow(dead_code)]
-
+use solana_sdk::pubkey;
 use solana_sdk::pubkey::Pubkey;
-use std::str::FromStr;
 
-fn verifier_program_id() -> Pubkey {
-    Pubkey::from_str("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV").expect("valid pubkey")
-}
+const VERIFIER_PROGRAM: Pubkey = pubkey!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8ExgnrfV");
+const ANCHOR_PROGRAM: Pubkey = pubkey!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
+const REGISTRY_PROGRAM: Pubkey = pubkey!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
 
-fn anchor_program_id() -> Pubkey {
-    Pubkey::from_str("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2").expect("valid pubkey")
-}
-
-fn registry_program_id() -> Pubkey {
-    Pubkey::from_str("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW").expect("valid pubkey")
+pub fn verifier_program_id() -> Pubkey {
+    VERIFIER_PROGRAM
 }
 
 pub fn find_challenge_pda(challenger: &Pubkey, nonce: &[u8; 32]) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[b"challenge", challenger.as_ref(), nonce.as_ref()],
-        &verifier_program_id(),
+        &VERIFIER_PROGRAM,
     )
 }
 
 pub fn find_verification_result_pda(verifier: &Pubkey, nonce: &[u8; 32]) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[b"verification", verifier.as_ref(), nonce.as_ref()],
-        &verifier_program_id(),
+        &VERIFIER_PROGRAM,
     )
 }
 
+#[allow(dead_code)] // Used in Phase 6 integrator onboarding
 pub fn find_identity_state_pda(user: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"identity", user.as_ref()], &anchor_program_id())
+    Pubkey::find_program_address(&[b"identity", user.as_ref()], &ANCHOR_PROGRAM)
 }
 
+#[allow(dead_code)] // Used in Phase 6 integrator onboarding
 pub fn find_protocol_config_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"protocol_config"], &registry_program_id())
+    Pubkey::find_program_address(&[b"protocol_config"], &REGISTRY_PROGRAM)
 }
 
 #[cfg(test)]
