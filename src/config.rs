@@ -27,15 +27,28 @@ impl Config {
         let ws_url =
             std::env::var("WS_URL").unwrap_or_else(|_| "wss://api.devnet.solana.com".into());
 
-        let keypair_path = std::env::var("RELAYER_KEYPAIR_PATH")
-            .unwrap_or_else(|_| "./relayer-keypair.json".into());
+        // Load keypair from RELAYER_KEYPAIR env var (JSON array of bytes, for cloud deploys)
+        // or from RELAYER_KEYPAIR_PATH file (for local development)
+        let relayer_keypair = if let Ok(json) = std::env::var("RELAYER_KEYPAIR") {
+            let bytes: Vec<u8> = serde_json::from_str(&json)
+                .map_err(|e| format!("RELAYER_KEYPAIR is not valid JSON: {}", e))?;
+            Keypair::try_from(bytes.as_slice())
+                .map_err(|e| format!("RELAYER_KEYPAIR contains invalid keypair: {}", e))?
+        } else {
+            let keypair_path = std::env::var("RELAYER_KEYPAIR_PATH")
+                .unwrap_or_else(|_| "./relayer-keypair.json".into());
+            read_keypair_file(&keypair_path)
+                .map_err(|e| format!("Failed to read keypair from {}: {}", keypair_path, e))?
+        };
 
-        let relayer_keypair = read_keypair_file(&keypair_path)
-            .map_err(|e| format!("Failed to read keypair from {}: {}", keypair_path, e))?;
-
-        let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
-            .unwrap_or_else(|_| "0.0.0.0:3001".into())
-            .parse()?;
+        // Railway sets PORT env var. Fall back to LISTEN_ADDR or default.
+        let listen_addr: SocketAddr = if let Ok(port) = std::env::var("PORT") {
+            format!("0.0.0.0:{}", port).parse()?
+        } else {
+            std::env::var("LISTEN_ADDR")
+                .unwrap_or_else(|_| "0.0.0.0:3001".into())
+                .parse()?
+        };
 
         let api_keys: Vec<String> = match std::env::var("API_KEYS") {
             Ok(s) => serde_json::from_str(&s).map_err(|e| {
