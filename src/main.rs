@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 use config::Config;
 use integrator::tracker::IntegratorTracker;
 use listener::event_monitor::EventMonitor;
+use relayer::commitment_registry::CommitmentRegistry;
 use relayer::transaction::RelayerTransaction;
 use server::{create_router, AppState};
 use solana::client::SolanaClient;
@@ -55,11 +56,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Integrator tracker initialized (in-memory, resets on restart)"
     );
 
+    let commitment_registry = Arc::new(CommitmentRegistry::new());
+    tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
+
+    // Spawn background eviction task for stale commitment entries
+    let registry_ref = Arc::clone(&commitment_registry);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            registry_ref.evict_stale();
+        }
+    });
+
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
         rate_limiter,
         tracker,
+        commitment_registry,
     };
 
     let app = create_router(state);

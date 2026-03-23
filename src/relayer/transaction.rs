@@ -5,10 +5,6 @@ use crate::solana::client::SolanaClient;
 use crate::solana::instructions;
 use crate::solana::pda;
 
-/// VerificationResult account layout offset for `is_valid` field:
-/// 8 (discriminator) + 32 (verifier) + 32 (proof_hash) + 8 (verified_at) = 80
-const VERIFICATION_IS_VALID_OFFSET: usize = 8 + 32 + 32 + 8;
-
 pub struct VerificationOutcome {
     pub signature: String,
     pub is_valid: bool,
@@ -24,7 +20,8 @@ impl RelayerTransaction {
     }
 
     /// Submit a verification: create_challenge + verify_proof in one transaction.
-    /// Returns the transaction signature and whether the proof was valid.
+    /// After the verify_proof revert fix, a confirmed transaction guarantees the
+    /// proof was valid (invalid proofs revert the entire transaction).
     pub async fn submit_verification(
         &self,
         proof_bytes: &[u8],
@@ -55,28 +52,13 @@ impl RelayerTransaction {
 
         tracing::info!(
             signature = %signature,
-            "Verification transaction confirmed"
+            "Verification transaction confirmed — proof valid"
         );
 
-        let is_valid = match self.client.get_account_data(&verification_pda).await? {
-            Some(data) => {
-                if data.len() <= VERIFICATION_IS_VALID_OFFSET {
-                    tracing::warn!(
-                        expected = VERIFICATION_IS_VALID_OFFSET + 1,
-                        actual = data.len(),
-                        "VerificationResult account data too short"
-                    );
-                    false
-                } else {
-                    data[VERIFICATION_IS_VALID_OFFSET] == 1
-                }
-            }
-            None => false,
-        };
-
+        // Transaction confirmed = proof was valid (invalid proofs revert on-chain)
         Ok(VerificationOutcome {
             signature: signature.to_string(),
-            is_valid,
+            is_valid: true,
         })
     }
 }
