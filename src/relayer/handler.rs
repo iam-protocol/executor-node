@@ -107,11 +107,13 @@ pub async fn verify_handler(
         }
     };
 
+    let fresh_remaining = state.tracker.get_remaining(&api_key);
+
     tracing::info!(
         api_key = %api_key,
         signature = %outcome.signature,
         verified = outcome.is_valid,
-        remaining_quota = remaining,
+        remaining_quota = fresh_remaining,
         "Re-verification completed"
     );
 
@@ -119,7 +121,7 @@ pub async fn verify_handler(
         success: true,
         tx_signature: Some(outcome.signature),
         verified: Some(outcome.is_valid),
-        remaining_quota: Some(remaining),
+        remaining_quota: Some(fresh_remaining),
         error: None,
     }))
 }
