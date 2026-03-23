@@ -40,6 +40,7 @@ impl SolanaClient {
             .map_err(|e| AppError::SolanaRpc(e.to_string()))
     }
 
+    #[allow(dead_code)] // Used when executor builds update_anchor instructions (Phase 6)
     pub async fn get_account_data(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, AppError> {
         match self.rpc.get_account(pubkey).await {
             Ok(account) => Ok(Some(account.data)),
