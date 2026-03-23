@@ -5,6 +5,10 @@ use crate::solana::client::SolanaClient;
 use crate::solana::instructions;
 use crate::solana::pda;
 
+/// VerificationResult account layout offset for `is_valid` field:
+/// 8 (discriminator) + 32 (verifier) + 32 (proof_hash) + 8 (verified_at) = 80
+const VERIFICATION_IS_VALID_OFFSET: usize = 8 + 32 + 32 + 8;
+
 pub struct VerificationOutcome {
     pub signature: String,
     pub is_valid: bool,
@@ -56,8 +60,16 @@ impl RelayerTransaction {
 
         let is_valid = match self.client.get_account_data(&verification_pda).await? {
             Some(data) => {
-                // is_valid is at byte offset 80: 8 (disc) + 32 (verifier) + 32 (proof_hash) + 8 (verified_at)
-                data.get(80).copied() == Some(1)
+                if data.len() <= VERIFICATION_IS_VALID_OFFSET {
+                    tracing::warn!(
+                        expected = VERIFICATION_IS_VALID_OFFSET + 1,
+                        actual = data.len(),
+                        "VerificationResult account data too short"
+                    );
+                    false
+                } else {
+                    data[VERIFICATION_IS_VALID_OFFSET] == 1
+                }
             }
             None => false,
         };
