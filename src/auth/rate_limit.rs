@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use governor::clock::DefaultClock;
@@ -9,11 +10,13 @@ use governor::{Quota, RateLimiter as GovernorLimiter};
 type Limiter = GovernorLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 const MAX_TRACKED_KEYS: usize = 10_000;
+const ENTRY_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Per-API-key rate limiter using the GCRA algorithm.
-/// Bounded to MAX_TRACKED_KEYS entries to prevent memory exhaustion.
+/// Entries are evicted after 5 minutes of inactivity.
+/// Bounded to MAX_TRACKED_KEYS to prevent memory exhaustion.
 pub struct RateLimiter {
-    limiters: DashMap<String, Arc<Limiter>>,
+    limiters: DashMap<String, (Arc<Limiter>, Instant)>,
     quota: Quota,
 }
 
@@ -29,20 +32,26 @@ impl RateLimiter {
     }
 
     /// Check if a request from the given API key is allowed.
-    /// Returns Ok(()) if allowed, Err(()) if rate limited.
-    /// Rejects new keys if the map exceeds MAX_TRACKED_KEYS to prevent OOM.
+    /// Evicts stale entries older than ENTRY_TTL on each call.
     pub fn check(&self, api_key: &str) -> Result<(), ()> {
+        // Lazy eviction of stale entries
+        self.limiters.retain(|_, (_, last_seen)| last_seen.elapsed() < ENTRY_TTL);
+
         if !self.limiters.contains_key(api_key) && self.limiters.len() >= MAX_TRACKED_KEYS {
             return Err(());
         }
 
-        let limiter = self
+        let mut limiter = self
             .limiters
             .entry(api_key.to_string())
-            .or_insert_with(|| Arc::new(GovernorLimiter::direct(self.quota)))
-            .clone();
+            .or_insert_with(|| (Arc::new(GovernorLimiter::direct(self.quota)), Instant::now()));
 
-        limiter.check().map_err(|_| ())
+        // Update last-seen timestamp
+        limiter.1 = Instant::now();
+        let lim = limiter.0.clone();
+        drop(limiter);
+
+        lim.check().map_err(|_| ())
     }
 }
 
