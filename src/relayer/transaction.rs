@@ -20,7 +20,8 @@ impl RelayerTransaction {
     }
 
     /// Submit a verification: create_challenge + verify_proof in one transaction.
-    /// Returns the transaction signature and whether the proof was valid.
+    /// After the verify_proof revert fix, a confirmed transaction guarantees the
+    /// proof was valid (invalid proofs revert the entire transaction).
     pub async fn submit_verification(
         &self,
         proof_bytes: &[u8],
@@ -51,20 +52,13 @@ impl RelayerTransaction {
 
         tracing::info!(
             signature = %signature,
-            "Verification transaction confirmed"
+            "Verification transaction confirmed — proof valid"
         );
 
-        let is_valid = match self.client.get_account_data(&verification_pda).await? {
-            Some(data) => {
-                // is_valid is at byte offset 80: 8 (disc) + 32 (verifier) + 32 (proof_hash) + 8 (verified_at)
-                data.get(80).copied() == Some(1)
-            }
-            None => false,
-        };
-
+        // Transaction confirmed = proof was valid (invalid proofs revert on-chain)
         Ok(VerificationOutcome {
             signature: signature.to_string(),
-            is_valid,
+            is_valid: true,
         })
     }
 }

@@ -27,23 +27,20 @@ impl Config {
         let ws_url =
             std::env::var("WS_URL").unwrap_or_else(|_| "wss://api.devnet.solana.com".into());
 
-        // Load keypair from RELAYER_KEYPAIR env var (JSON array of bytes, for cloud deploys)
-        // or from RELAYER_KEYPAIR_PATH file (for local development)
         let relayer_keypair = if let Ok(json) = std::env::var("RELAYER_KEYPAIR") {
             let bytes: Vec<u8> = serde_json::from_str(&json)
-                .map_err(|e| format!("RELAYER_KEYPAIR is not valid JSON: {}", e))?;
+                .map_err(|e| format!("RELAYER_KEYPAIR is not valid JSON: {e}"))?;
             Keypair::try_from(bytes.as_slice())
-                .map_err(|e| format!("RELAYER_KEYPAIR contains invalid keypair: {}", e))?
+                .map_err(|e| format!("RELAYER_KEYPAIR contains invalid keypair: {e}"))?
         } else {
             let keypair_path = std::env::var("RELAYER_KEYPAIR_PATH")
                 .unwrap_or_else(|_| "./relayer-keypair.json".into());
             read_keypair_file(&keypair_path)
-                .map_err(|e| format!("Failed to read keypair from {}: {}", keypair_path, e))?
+                .map_err(|e| format!("Failed to read keypair from {keypair_path}: {e}"))?
         };
 
-        // Railway sets PORT env var. Fall back to LISTEN_ADDR or default.
         let listen_addr: SocketAddr = if let Ok(port) = std::env::var("PORT") {
-            format!("0.0.0.0:{}", port).parse()?
+            format!("0.0.0.0:{port}").parse()?
         } else {
             std::env::var("LISTEN_ADDR")
                 .unwrap_or_else(|_| "0.0.0.0:3001".into())
@@ -51,27 +48,23 @@ impl Config {
         };
 
         let api_keys: Vec<String> = match std::env::var("API_KEYS") {
-            Ok(s) => serde_json::from_str(&s).map_err(|e| {
-                format!("API_KEYS contains invalid JSON: {}", e)
-            })?,
+            Ok(s) => serde_json::from_str(&s)
+                .map_err(|e| format!("API_KEYS contains invalid JSON: {e}"))?,
             Err(_) => vec![],
         };
 
         let rate_limit_per_minute: u32 = match std::env::var("RATE_LIMIT_PER_MINUTE") {
-            Ok(s) => s.parse().map_err(|e| {
-                format!("RATE_LIMIT_PER_MINUTE is not a valid u32: {}", e)
-            })?,
+            Ok(s) => s.parse()
+                .map_err(|e| format!("RATE_LIMIT_PER_MINUTE is not a valid u32: {e}"))?,
             Err(_) => 60,
         };
 
         let integrators: Vec<IntegratorConfig> = match std::env::var("INTEGRATORS") {
-            Ok(s) => serde_json::from_str(&s).map_err(|e| {
-                format!("INTEGRATORS contains invalid JSON: {}", e)
-            })?,
+            Ok(s) => serde_json::from_str(&s)
+                .map_err(|e| format!("INTEGRATORS contains invalid JSON: {e}"))?,
             Err(_) => vec![],
         };
 
-        // Auto-populate api_keys from integrator configs if api_keys is empty
         let api_keys = if api_keys.is_empty() && !integrators.is_empty() {
             integrators.iter().map(|i| i.api_key.clone()).collect()
         } else {

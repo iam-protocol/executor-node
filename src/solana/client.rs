@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
@@ -7,6 +9,10 @@ use solana_sdk::signature::{Keypair, Signature, Signer};
 use solana_sdk::transaction::Transaction;
 
 use crate::error::AppError;
+
+const MAX_RETRIES: usize = 3;
+const INITIAL_BACKOFF: Duration = Duration::from_millis(200);
+const MAX_BACKOFF: Duration = Duration::from_secs(5);
 
 pub struct SolanaClient {
     rpc: RpcClient,
@@ -34,6 +40,7 @@ impl SolanaClient {
             .map_err(|e| AppError::SolanaRpc(e.to_string()))
     }
 
+    #[allow(dead_code)] // Used when executor builds update_anchor instructions (Phase 6)
     pub async fn get_account_data(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, AppError> {
         match self.rpc.get_account(pubkey).await {
             Ok(account) => Ok(Some(account.data)),
@@ -50,30 +57,64 @@ impl SolanaClient {
     }
 
     /// Send a transaction with the given instructions, signed by the relayer keypair.
-    /// Includes a compute budget instruction for ZK verification headroom.
+    /// Retries up to MAX_RETRIES times with exponential backoff on transient failures.
+    /// Fetches a fresh blockhash on each retry.
     pub async fn send_verification_tx(
         &self,
         instructions: Vec<Instruction>,
     ) -> Result<Signature, AppError> {
-        let mut all_instructions = vec![ComputeBudgetInstruction::set_compute_unit_limit(400_000)];
-        all_instructions.extend(instructions);
+        let mut backoff = INITIAL_BACKOFF;
+        let mut last_error = String::new();
 
-        let recent_blockhash = self
-            .rpc
-            .get_latest_blockhash()
-            .await
-            .map_err(|e| AppError::SolanaRpc(e.to_string()))?;
+        for attempt in 0..MAX_RETRIES {
+            let mut all_instructions =
+                vec![ComputeBudgetInstruction::set_compute_unit_limit(400_000)];
+            all_instructions.extend(instructions.clone());
 
-        let tx = Transaction::new_signed_with_payer(
-            &all_instructions,
-            Some(&self.relayer_keypair.pubkey()),
-            &[&self.relayer_keypair],
-            recent_blockhash,
-        );
+            let recent_blockhash = match self.rpc.get_latest_blockhash().await {
+                Ok(bh) => bh,
+                Err(e) => {
+                    last_error = e.to_string();
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            attempt,
+                            error = %last_error,
+                            "Blockhash fetch failed, retrying"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(AppError::SolanaRpc(last_error));
+                }
+            };
 
-        self.rpc
-            .send_and_confirm_transaction(&tx)
-            .await
-            .map_err(|e| AppError::TransactionFailed(e.to_string()))
+            let tx = Transaction::new_signed_with_payer(
+                &all_instructions,
+                Some(&self.relayer_keypair.pubkey()),
+                &[&self.relayer_keypair],
+                recent_blockhash,
+            );
+
+            match self.rpc.send_and_confirm_transaction(&tx).await {
+                Ok(sig) => return Ok(sig),
+                Err(e) => {
+                    last_error = e.to_string();
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            attempt,
+                            error = %last_error,
+                            "Transaction failed, retrying with fresh blockhash"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(AppError::TransactionFailed(last_error));
+                }
+            }
+        }
+
+        Err(AppError::TransactionFailed(last_error))
     }
 }

@@ -22,6 +22,8 @@ pub struct VerifyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub registered: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub remaining_quota: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -45,22 +47,40 @@ pub async fn verify_handler(
         )));
     }
 
+    let mut commitment_arr = [0u8; 32];
+    commitment_arr.copy_from_slice(&req.commitment);
+
+    // Atomically check-and-record: returns true if commitment was already known.
+    // Prevents clients from replaying is_first_verification=true for the same commitment.
+    let commitment_known = state
+        .commitment_registry
+        .check_and_record(&api_key, commitment_arr);
+
+    let is_first = if commitment_known {
+        if req.is_first_verification {
+            tracing::warn!(
+                api_key = %api_key,
+                "Client claimed is_first_verification but commitment already known — forcing re-verification"
+            );
+        }
+        false
+    } else {
+        req.is_first_verification
+    };
+
     let remaining = state.tracker.check_and_deduct(&api_key)?;
 
-    if req.is_first_verification {
-        // First verification: no proof to verify, just record the commitment.
-        // On-chain: this would mint the IAM Anchor with the initial commitment.
-        // For devnet pilot: accept and return success without submitting on-chain.
+    if is_first {
         tracing::info!(
             api_key = %api_key,
-            commitment_len = req.commitment.len(),
-            "First verification recorded (no proof required)"
+            "First verification: commitment registered (no proof required)"
         );
 
         return Ok(Json(VerifyResponse {
             success: true,
             tx_signature: None,
-            verified: Some(true),
+            verified: None,
+            registered: Some(true),
             remaining_quota: Some(remaining),
             error: None,
         }));
@@ -107,11 +127,13 @@ pub async fn verify_handler(
         }
     };
 
+    let fresh_remaining = state.tracker.get_remaining(&api_key);
+
     tracing::info!(
         api_key = %api_key,
         signature = %outcome.signature,
         verified = outcome.is_valid,
-        remaining_quota = remaining,
+        remaining_quota = fresh_remaining,
         "Re-verification completed"
     );
 
@@ -119,7 +141,8 @@ pub async fn verify_handler(
         success: true,
         tx_signature: Some(outcome.signature),
         verified: Some(outcome.is_valid),
-        remaining_quota: Some(remaining),
+        registered: None,
+        remaining_quota: Some(fresh_remaining),
         error: None,
     }))
 }

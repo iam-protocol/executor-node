@@ -11,6 +11,7 @@ use crate::auth::api_key::api_key_auth;
 use crate::auth::rate_limit::RateLimiter;
 use crate::error::AppError;
 use crate::integrator::tracker::IntegratorTracker;
+use crate::relayer::commitment_registry::CommitmentRegistry;
 use crate::relayer::handler::{health_handler, verify_handler};
 use crate::relayer::transaction::RelayerTransaction;
 
@@ -20,6 +21,7 @@ pub struct AppState {
     pub api_keys: Arc<Vec<String>>,
     pub rate_limiter: Arc<RateLimiter>,
     pub tracker: Arc<IntegratorTracker>,
+    pub commitment_registry: Arc<CommitmentRegistry>,
 }
 
 async fn auth_middleware(

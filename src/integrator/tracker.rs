@@ -106,6 +106,16 @@ impl IntegratorTracker {
             tracing::info!(api_key, used = entry.used, "Quota refunded");
         }
     }
+
+    /// Get current remaining quota without deducting.
+    pub fn get_remaining(&self, api_key: &str) -> u64 {
+        self.state
+            .get(api_key)
+            .map(|s| {
+                if s.quota == 0 { u64::MAX } else { s.quota.saturating_sub(s.used) }
+            })
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

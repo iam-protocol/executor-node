@@ -82,9 +82,11 @@ impl EventMonitor {
                 continue;
             }
 
-            // Look for verification-related log entries
-            let has_challenge = logs.iter().any(|l| l.contains("ChallengeCreated"));
-            let has_verification = logs.iter().any(|l| l.contains("VerificationComplete"));
+            // Match log entries from the verifier program only
+            let program_id_str = self.verifier_program_id.to_string();
+            let is_verifier_log = |l: &str| l.contains(&program_id_str);
+            let has_challenge = logs.iter().any(|l| is_verifier_log(l) && l.contains("ChallengeCreated"));
+            let has_verification = logs.iter().any(|l| is_verifier_log(l) && l.contains("VerificationComplete"));
 
             if has_verification {
                 tracing::info!(
