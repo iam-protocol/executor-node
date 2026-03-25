@@ -17,6 +17,7 @@ pub struct Config {
     pub api_keys: Vec<String>,
     pub rate_limit_per_minute: u32,
     pub integrators: Vec<IntegratorConfig>,
+    pub cors_origins: Vec<String>,
 }
 
 impl Config {
@@ -71,6 +72,12 @@ impl Config {
             api_keys
         };
 
+        let cors_origins: Vec<String> = match std::env::var("CORS_ORIGINS") {
+            Ok(s) => serde_json::from_str(&s)
+                .map_err(|e| format!("CORS_ORIGINS contains invalid JSON: {e}"))?,
+            Err(_) => vec![],
+        };
+
         Ok(Config {
             rpc_url,
             ws_url,
@@ -79,6 +86,7 @@ impl Config {
             api_keys,
             rate_limit_per_minute,
             integrators,
+            cors_origins,
         })
     }
 }
