@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         commitment_registry,
     };
 
-    let app = create_router(state);
+    let app = create_router(state, &config.cors_origins);
 
     // Spawn RPC event listener in background
     let verifier_program_id = solana::pda::verifier_program_id();

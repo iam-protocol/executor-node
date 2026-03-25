@@ -51,7 +51,7 @@ async fn rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     // Middleware order: auth runs first (outermost layer applied last),
     // then rate limiting runs against validated keys only.
     let verify_routes = Router::new()
@@ -65,11 +65,26 @@ pub fn create_router(state: AppState) -> Router {
             auth_middleware,
         ));
 
+    let cors = if cors_origins.is_empty() {
+        // No origins configured — permissive for development
+        CorsLayer::permissive()
+    } else {
+        CorsLayer::new()
+            .allow_origin(
+                cors_origins
+                    .iter()
+                    .filter_map(|o| o.parse().ok())
+                    .collect::<Vec<axum::http::HeaderValue>>(),
+            )
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::OPTIONS])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::HeaderName::from_static("x-api-key")])
+    };
+
     Router::new()
         .route("/health", get(health_handler))
         .merge(verify_routes)
         .layer(DefaultBodyLimit::max(4096))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
