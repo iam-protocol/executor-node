@@ -69,13 +69,19 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         // No origins configured — permissive for development
         CorsLayer::permissive()
     } else {
+        let parsed: Vec<axum::http::HeaderValue> = cors_origins
+            .iter()
+            .filter_map(|o| match o.parse() {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    tracing::warn!(origin = %o, "Ignoring unparseable CORS origin");
+                    None
+                }
+            })
+            .collect();
+        tracing::info!(count = parsed.len(), "CORS restricted to configured origins");
         CorsLayer::new()
-            .allow_origin(
-                cors_origins
-                    .iter()
-                    .filter_map(|o| o.parse().ok())
-                    .collect::<Vec<axum::http::HeaderValue>>(),
-            )
+            .allow_origin(parsed)
             .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::OPTIONS])
             .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::HeaderName::from_static("x-api-key")])
     };
