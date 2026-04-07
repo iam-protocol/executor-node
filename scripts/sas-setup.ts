@@ -113,7 +113,7 @@ async function main() {
 
   // 2. Create IAM Schema
   console.log("\n--- Creating IAM Schema ---");
-  const schemaName = "iam-humanity";
+  const schemaName = "iam-humanity-v2";
   const schemaVersion = 1;
   const [schemaPda] = await deriveSchemaPda({
     credential: credentialPda,
@@ -135,7 +135,7 @@ async function main() {
         description: "IAM Protocol Proof-of-Humanity attestation",
         fieldNames: ["isHuman", "trustScore", "verifiedAt", "mode"],
         schema: schemaPda,
-        layout: Buffer.from([10, 2, 7, 12]),
+        layout: Buffer.from([10, 1, 8, 12]), // Bool=10, U16=1, I64=8, String=12
       }),
     ]);
     console.log(`Schema created: ${sig}`);
