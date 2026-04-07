@@ -3,3 +3,4 @@
 relayer-keypair.json
 *.key
 .DS_Store
+scripts/node_modules/

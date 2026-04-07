@@ -12,6 +12,8 @@ use crate::auth::rate_limit::RateLimiter;
 use crate::error::AppError;
 use crate::integrator::tracker::IntegratorTracker;
 use crate::relayer::commitment_registry::CommitmentRegistry;
+use crate::attestation::handler::attest_handler;
+use crate::attestation::sas::SasAttestor;
 use crate::relayer::handler::{health_handler, verify_handler};
 use crate::relayer::transaction::RelayerTransaction;
 
@@ -22,6 +24,7 @@ pub struct AppState {
     pub rate_limiter: Arc<RateLimiter>,
     pub tracker: Arc<IntegratorTracker>,
     pub commitment_registry: Arc<CommitmentRegistry>,
+    pub sas_attestor: Option<Arc<SasAttestor>>,
 }
 
 async fn auth_middleware(
@@ -56,6 +59,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     // then rate limiting runs against validated keys only.
     let verify_routes = Router::new()
         .route("/verify", post(verify_handler))
+        .route("/attest", post(attest_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,

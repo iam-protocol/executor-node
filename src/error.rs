@@ -21,6 +21,9 @@ pub enum AppError {
 
     #[error("Transaction failed: {0}")]
     TransactionFailed(String),
+
+    #[error("Attestation failed: {0}")]
+    AttestationFailed(String),
 }
 
 impl IntoResponse for AppError {
@@ -34,6 +37,9 @@ impl IntoResponse for AppError {
             }
             AppError::SolanaRpc(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
             AppError::TransactionFailed(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
+            }
+            AppError::AttestationFailed(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
             }
         };
