@@ -23,7 +23,6 @@ pub fn find_verification_result_pda(verifier: &Pubkey, nonce: &[u8; 32]) -> (Pub
     )
 }
 
-#[allow(dead_code)] // Used in Phase 6 integrator onboarding
 pub fn find_identity_state_pda(user: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"identity", user.as_ref()], &ANCHOR_PROGRAM)
 }

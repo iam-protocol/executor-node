@@ -1146,6 +1146,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "solana-attestation-service-client",
  "solana-client",
  "solana-sdk",
  "subtle",
@@ -3429,6 +3430,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d52e52720efe60465b052b9e7445a01c17550666beec855cce66f44766697bc2"
 dependencies = [
  "parking_lot",
+]
+
+[[package]]
+name = "solana-attestation-service-client"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad4872ad4d246f62bf461f4d31b225d15ad466b1a7f508936a312d9b7382797e"
+dependencies = [
+ "borsh 1.6.1",
+ "solana-program",
 ]
 
 [[package]]

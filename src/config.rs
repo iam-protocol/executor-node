@@ -1,6 +1,8 @@
 use serde::Deserialize;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{read_keypair_file, Keypair};
 use std::net::SocketAddr;
+use std::str::FromStr;
 
 #[derive(Deserialize)]
 pub struct IntegratorConfig {
@@ -18,6 +20,9 @@ pub struct Config {
     pub rate_limit_per_minute: u32,
     pub integrators: Vec<IntegratorConfig>,
     pub cors_origins: Vec<String>,
+    pub sas_credential_pda: Option<Pubkey>,
+    pub sas_schema_pda: Option<Pubkey>,
+    pub sas_attestation_ttl_days: u64,
 }
 
 impl Config {
@@ -78,6 +83,19 @@ impl Config {
             Err(_) => vec![],
         };
 
+        let sas_credential_pda = std::env::var("SAS_CREDENTIAL_PDA")
+            .ok()
+            .and_then(|s| Pubkey::from_str(&s).ok());
+
+        let sas_schema_pda = std::env::var("SAS_SCHEMA_PDA")
+            .ok()
+            .and_then(|s| Pubkey::from_str(&s).ok());
+
+        let sas_attestation_ttl_days: u64 = std::env::var("SAS_ATTESTATION_TTL_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
         Ok(Config {
             rpc_url,
             ws_url,
@@ -87,6 +105,9 @@ impl Config {
             rate_limit_per_minute,
             integrators,
             cors_origins,
+            sas_credential_pda,
+            sas_schema_pda,
+            sas_attestation_ttl_days,
         })
     }
 }

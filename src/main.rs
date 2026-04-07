@@ -1,3 +1,4 @@
+mod attestation;
 mod auth;
 mod config;
 mod error;
@@ -10,6 +11,7 @@ mod solana;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
+use attestation::sas::SasAttestor;
 use config::Config;
 use integrator::tracker::IntegratorTracker;
 use listener::event_monitor::EventMonitor;
@@ -37,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Relayer initialized"
     );
 
-    let relayer_tx = Arc::new(RelayerTransaction::new(solana_client));
+    let relayer_tx = Arc::new(RelayerTransaction::new(Arc::clone(&solana_client)));
 
     // Initialize per-API-key rate limiter
     let rate_limiter = Arc::new(auth::rate_limit::RateLimiter::new(
@@ -59,6 +61,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment_registry = Arc::new(CommitmentRegistry::new());
     tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
 
+    // Initialize SAS attestor if configured
+    let sas_attestor = match (&config.sas_credential_pda, &config.sas_schema_pda) {
+        (Some(cred), Some(schema)) => {
+            tracing::info!(
+                credential = %cred,
+                schema = %schema,
+                ttl_days = config.sas_attestation_ttl_days,
+                "SAS attestor initialized"
+            );
+            Some(Arc::new(SasAttestor::new(
+                *cred,
+                *schema,
+                config.sas_attestation_ttl_days,
+                Arc::clone(&solana_client),
+            )))
+        }
+        _ => {
+            tracing::info!("SAS attestation disabled (SAS_CREDENTIAL_PDA or SAS_SCHEMA_PDA not set)");
+            None
+        }
+    };
+
     // Spawn background eviction task for stale commitment entries
     let registry_ref = Arc::clone(&commitment_registry);
     tokio::spawn(async move {
@@ -75,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limiter,
         tracker,
         commitment_registry,
+        sas_attestor,
     };
 
     let app = create_router(state, &config.cors_origins);
