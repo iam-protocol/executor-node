@@ -137,6 +137,8 @@ pub async fn verify_handler(
         "Re-verification completed"
     );
 
+    state.metrics.increment_verifications();
+
     Ok(Json(VerifyResponse {
         success: true,
         tx_signature: Some(outcome.signature),

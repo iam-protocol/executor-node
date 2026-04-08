@@ -43,6 +43,9 @@ pub async fn attest_handler(
                 attestation_sig = %sig,
                 "SAS attestation issued"
             );
+
+            state.metrics.increment_attestations();
+
             Ok(Json(AttestResponse {
                 success: true,
                 attestation_tx: Some(sig),
