@@ -4,6 +4,8 @@ pub struct StatusMetrics {
     total_verifications_relayed: AtomicU64,
     total_attestations_issued: AtomicU64,
     start_time: u64,
+    cached_balance: AtomicU64,
+    balance_fetched_at: AtomicU64,
 }
 
 impl StatusMetrics {
@@ -13,8 +15,10 @@ impl StatusMetrics {
             total_attestations_issued: AtomicU64::new(0),
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
+            cached_balance: AtomicU64::new(0),
+            balance_fetched_at: AtomicU64::new(0),
         }
     }
 
@@ -42,6 +46,19 @@ impl StatusMetrics {
     pub fn start_time(&self) -> u64 {
         self.start_time
     }
+
+    pub fn cached_balance(&self) -> u64 {
+        self.cached_balance.load(Ordering::Relaxed)
+    }
+
+    pub fn balance_fetched_at(&self) -> u64 {
+        self.balance_fetched_at.load(Ordering::Relaxed)
+    }
+
+    pub fn update_cached_balance(&self, balance: u64, fetched_at: u64) {
+        self.cached_balance.store(balance, Ordering::Relaxed);
+        self.balance_fetched_at.store(fetched_at, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -61,7 +78,7 @@ mod tests {
         m.increment_verifications();
         m.increment_verifications();
         assert_eq!(m.verifications_relayed(), 2);
-        assert_eq!(m.attestations_issued(), 0); 
+        assert_eq!(m.attestations_issued(), 0);
     }
 
     #[test]
@@ -86,14 +103,29 @@ mod tests {
     fn start_time_is_recent() {
         let before = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         let m = StatusMetrics::new();
         let after = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         assert!(m.start_time() >= before);
         assert!(m.start_time() <= after);
+    }
+
+    #[test]
+    fn balance_cache_starts_empty() {
+        let m = StatusMetrics::new();
+        assert_eq!(m.cached_balance(), 0);
+        assert_eq!(m.balance_fetched_at(), 0);
+    }
+
+    #[test]
+    fn balance_cache_updates_together() {
+        let m = StatusMetrics::new();
+        m.update_cached_balance(123, 456);
+        assert_eq!(m.cached_balance(), 123);
+        assert_eq!(m.balance_fetched_at(), 456);
     }
 }
