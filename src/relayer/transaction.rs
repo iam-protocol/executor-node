@@ -61,4 +61,8 @@ impl RelayerTransaction {
             is_valid: true,
         })
     }
+
+    pub async fn get_balance(&self) -> Result<u64, AppError> {
+        self.client.get_balance().await
+    }
 }
