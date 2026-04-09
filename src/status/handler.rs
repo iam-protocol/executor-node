@@ -40,10 +40,9 @@ pub async fn status_handler(
             });
 
             if is_valid {
-                let balance_fetched_at = state.metrics.balance_fetched_at();
-                let cached_balance = state.metrics.cached_balance();
+                let (cached_balance, fetched_at) = state.metrics.cached_balance();
 
-                if now.saturating_sub(balance_fetched_at) < BALANCE_CACHE_TTL_SECONDS {
+                if now.saturating_sub(fetched_at) < BALANCE_CACHE_TTL_SECONDS {
                     Some(cached_balance)
                 } else {
                     let balance = state.relayer_tx.get_balance().await?;

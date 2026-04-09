@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock;
 
 pub struct StatusMetrics {
     total_verifications_relayed: AtomicU64,
     total_attestations_issued: AtomicU64,
     start_time: u64,
-    cached_balance: AtomicU64,
-    balance_fetched_at: AtomicU64,
+    balance_cache: RwLock<(u64, u64)>, // (balance, fetched_at) — updated atomically
 }
 
 impl StatusMetrics {
@@ -17,8 +17,7 @@ impl StatusMetrics {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            cached_balance: AtomicU64::new(0),
-            balance_fetched_at: AtomicU64::new(0),
+            balance_cache: RwLock::new((0, 0)),
         }
     }
 
@@ -47,17 +46,13 @@ impl StatusMetrics {
         self.start_time
     }
 
-    pub fn cached_balance(&self) -> u64 {
-        self.cached_balance.load(Ordering::Relaxed)
-    }
-
-    pub fn balance_fetched_at(&self) -> u64 {
-        self.balance_fetched_at.load(Ordering::Relaxed)
+    pub fn cached_balance(&self) -> (u64, u64) {
+        *self.balance_cache.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn update_cached_balance(&self, balance: u64, fetched_at: u64) {
-        self.cached_balance.store(balance, Ordering::Relaxed);
-        self.balance_fetched_at.store(fetched_at, Ordering::Relaxed);
+        let mut cache = self.balance_cache.write().unwrap_or_else(|e| e.into_inner());
+        *cache = (balance, fetched_at);
     }
 }
 
@@ -117,15 +112,15 @@ mod tests {
     #[test]
     fn balance_cache_starts_empty() {
         let m = StatusMetrics::new();
-        assert_eq!(m.cached_balance(), 0);
-        assert_eq!(m.balance_fetched_at(), 0);
+        assert_eq!(m.cached_balance(), (0, 0));
     }
 
     #[test]
-    fn balance_cache_updates_together() {
+    fn balance_cache_updates_atomically() {
         let m = StatusMetrics::new();
         m.update_cached_balance(123, 456);
-        assert_eq!(m.cached_balance(), 123);
-        assert_eq!(m.balance_fetched_at(), 456);
+        let (balance, fetched_at) = m.cached_balance();
+        assert_eq!(balance, 123);
+        assert_eq!(fetched_at, 456);
     }
 }
