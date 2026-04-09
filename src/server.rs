@@ -16,6 +16,8 @@ use crate::attestation::handler::attest_handler;
 use crate::attestation::sas::SasAttestor;
 use crate::relayer::handler::{health_handler, verify_handler};
 use crate::relayer::transaction::RelayerTransaction;
+use crate::status::handler::status_handler;
+use crate::status::status_metrics::StatusMetrics;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +27,7 @@ pub struct AppState {
     pub tracker: Arc<IntegratorTracker>,
     pub commitment_registry: Arc<CommitmentRegistry>,
     pub sas_attestor: Option<Arc<SasAttestor>>,
+    pub metrics: Arc<StatusMetrics>,
 }
 
 async fn auth_middleware(
@@ -92,6 +95,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
 
     Router::new()
         .route("/health", get(health_handler))
+        .route("/status", get(status_handler))
         .merge(verify_routes)
         .layer(DefaultBodyLimit::max(4096))
         .layer(cors)

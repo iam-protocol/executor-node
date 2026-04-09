@@ -7,6 +7,7 @@ mod listener;
 mod relayer;
 mod server;
 mod solana;
+mod status;
 
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -100,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracker,
         commitment_registry,
         sas_attestor,
+        metrics: Arc::new(status::status_metrics::StatusMetrics::new()),
     };
 
     let app = create_router(state, &config.cors_origins);
