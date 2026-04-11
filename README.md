@@ -1,31 +1,45 @@
 # executor-node
 
-IAM Protocol executor node. HTTP relayer service that accepts ZK proofs from the Pulse SDK and submits on-chain verification transactions to Solana. Enables walletless verification — users prove their humanity without a wallet, SOL, or crypto knowledge.
+IAM Protocol executor node. Validation server and relayer service for the IAM Protocol. Generates signed challenges, validates behavioral features server-side using proprietary models, issues SAS attestations, and relays walletless verification transactions to Solana.
+
+## Architecture
+
+The executor serves two roles:
+
+1. **Validation server** — receives 134 statistical features from the Pulse SDK, runs proprietary validation models (loaded from the private `iam-validation` crate), performs cross-wallet Sybil detection via the fingerprint registry, and issues signed challenges.
+
+2. **Walletless relayer** — accepts ZK proofs and submits on-chain transactions for users without wallets (liveness-check tier). API key required.
 
 ## API
 
 ### POST /verify
 
-Accepts a Groth16 proof, submits `create_challenge` + `verify_proof` on-chain, returns the result.
+Accepts a Groth16 proof for walletless verification. Submits `create_challenge` + `verify_proof` on-chain.
 
 ```json
 Request:
 {
-  "proof_bytes": [0, 1, 2, ...],        // 256 bytes
-  "public_inputs": [[0, 1, ...], ...],  // 4 × 32 bytes
-  "commitment": [0, 1, ...]             // 32 bytes
+  "proof_bytes": [0, 1, 2, ...],
+  "public_inputs": [[0, 1, ...], ...],
+  "commitment": [0, 1, ...]
 }
 
 Response:
 {
   "success": true,
-  "tx_signature": "5abc...",
-  "verified": true,
-  "remaining_quota": 999
+  "tx_signature": "5abc..."
 }
 ```
 
-Requires `X-API-Key` header.
+Requires `X-API-Key` header (walletless tier only).
+
+### POST /attest
+
+Issues a Solana Attestation Service (SAS) attestation for a verified wallet.
+
+### GET /status
+
+Returns service metrics (uptime, relayer balance, verifications processed).
 
 ### GET /health
 
@@ -38,7 +52,7 @@ Returns service status (no auth required).
 
 # Configure environment
 cp .env.example .env
-# Edit .env: set RPC_URL, RELAYER_KEYPAIR_PATH, API_KEYS
+# Edit .env: set RPC_URL, RELAYER_KEYPAIR_PATH
 
 # Build
 cargo build --release
@@ -60,7 +74,9 @@ cargo test
 | `LISTEN_ADDR` | `0.0.0.0:3001` | Server bind address |
 | `API_KEYS` | `[]` | JSON array of valid API keys |
 | `RATE_LIMIT_PER_MINUTE` | `60` | Max requests per minute per API key |
-| `INTEGRATORS` | `[]` | JSON array of `{ api_key, name, quota }` objects |
+| `CORS_ORIGINS` | `[]` | JSON array of allowed origins (permissive if empty) |
+| `SAS_CREDENTIAL_PDA` | — | SAS credential PDA for attestation issuance |
+| `SAS_SCHEMA_PDA` | — | SAS schema PDA for attestation issuance |
 
 ## License
 
