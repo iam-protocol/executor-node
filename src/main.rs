@@ -63,11 +63,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment_registry = Arc::new(CommitmentRegistry::new());
     tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
 
-    let validation_service = Arc::new(
-        iam_validation::ValidationService::from_env()
-            .map_err(|e| format!("Failed to initialize validation service: {e}"))?,
-    );
-    tracing::info!("Validation service initialized");
+    let http_client = Arc::new(reqwest::Client::new());
+    if let Some(url) = &config.validation_service_url {
+        tracing::info!(url = %url, "Validation service configured");
+    } else {
+        tracing::info!("Validation service not configured (VALIDATION_SERVICE_URL not set)");
+    }
 
     // Initialize SAS attestor if configured
     let sas_attestor = match (&config.sas_credential_pda, &config.sas_schema_pda) {
@@ -101,16 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Spawn background eviction task for stale validation registry entries
-    let validation_ref = Arc::clone(&validation_service);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-        loop {
-            interval.tick().await;
-            validation_ref.registry().evict_stale();
-        }
-    });
-
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
@@ -119,7 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         commitment_registry,
         sas_attestor,
         metrics: Arc::new(status::status_metrics::StatusMetrics::new()),
-        validation_service,
+        http_client,
+        validation_url: config.validation_service_url,
+        validation_api_key: config.validation_api_key,
     };
 
     let app = create_router(state, &config.cors_origins);

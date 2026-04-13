@@ -1142,7 +1142,6 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "governor 0.8.1",
- "iam-validation",
  "rand 0.8.5",
  "reqwest",
  "serde",
@@ -1721,18 +1720,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
-]
-
-[[package]]
-name = "iam-validation"
-version = "0.1.0"
-source = "git+https://github.com/iam-protocol/iam-validation.git?branch=main#d0f24f85a67fe6530770a36dd5087702dce751af"
-dependencies = [
- "dashmap 6.1.0",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]

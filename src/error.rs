@@ -27,6 +27,9 @@ pub enum AppError {
 
     #[error("Validation failed")]
     ValidationFailed,
+
+    #[error("Validation service error: {0}")]
+    ValidationServiceError(String),
 }
 
 impl IntoResponse for AppError {
@@ -47,6 +50,9 @@ impl IntoResponse for AppError {
             }
             AppError::ValidationFailed => {
                 (StatusCode::BAD_REQUEST, "Verification failed".into())
+            }
+            AppError::ValidationServiceError(msg) => {
+                (StatusCode::BAD_GATEWAY, msg.clone())
             }
         };
 

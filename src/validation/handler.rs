@@ -32,7 +32,6 @@ pub async fn validate_features_handler(
         .unwrap_or("authenticated")
         .to_string();
 
-    // Validate wallet_id is a real Solana pubkey
     if Pubkey::from_str(&req.wallet_id).is_err() {
         return Err(AppError::InvalidRequest(format!(
             "invalid wallet_id: {}",
@@ -40,22 +39,53 @@ pub async fn validate_features_handler(
         )));
     }
 
-    // Deduct quota before doing work
     let remaining = state.tracker.check_and_deduct(&api_key)?;
 
-    let result = state
-        .validation_service
-        .validate_features(&req.features, &req.wallet_id)
-        .await;
+    // If validation service is not configured, pass through
+    let validation_url = match &state.validation_url {
+        Some(url) => url,
+        None => {
+            tracing::debug!("Validation service not configured, skipping");
+            state.metrics.increment_validations();
+            return Ok(Json(ValidateFeaturesResponse {
+                valid: true,
+                remaining_quota: Some(remaining),
+            }));
+        }
+    };
 
-    if !result.valid {
+    // Build request to internal validation service
+    let mut request = state
+        .http_client
+        .post(format!("{validation_url}/validate"))
+        .json(&serde_json::json!({
+            "features": req.features,
+            "wallet_id": req.wallet_id,
+        }))
+        .timeout(std::time::Duration::from_secs(3));
+
+    // Add bearer token if configured
+    if let Some(key) = &state.validation_api_key {
+        request = request.bearer_auth(key);
+    }
+
+    let response = match request.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            // Infrastructure failure — refund quota
+            state.tracker.refund(&api_key);
+            return Err(AppError::ValidationServiceError(e.to_string()));
+        }
+    };
+
+    state.metrics.increment_validations();
+
+    if !response.status().is_success() {
         tracing::info!(api_key = %api_key, wallet_id = %req.wallet_id, "Feature validation rejected");
-        state.metrics.increment_validations();
         return Err(AppError::ValidationFailed);
     }
 
     tracing::info!(api_key = %api_key, wallet_id = %req.wallet_id, "Feature validation passed");
-    state.metrics.increment_validations();
 
     Ok(Json(ValidateFeaturesResponse {
         valid: true,

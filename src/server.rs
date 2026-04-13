@@ -29,7 +29,9 @@ pub struct AppState {
     pub commitment_registry: Arc<CommitmentRegistry>,
     pub sas_attestor: Option<Arc<SasAttestor>>,
     pub metrics: Arc<StatusMetrics>,
-    pub validation_service: Arc<iam_validation::ValidationService>,
+    pub http_client: Arc<reqwest::Client>,
+    pub validation_url: Option<String>,
+    pub validation_api_key: Option<String>,
 }
 
 async fn auth_middleware(

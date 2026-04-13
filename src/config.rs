@@ -23,6 +23,8 @@ pub struct Config {
     pub sas_credential_pda: Option<Pubkey>,
     pub sas_schema_pda: Option<Pubkey>,
     pub sas_attestation_ttl_days: u64,
+    pub validation_service_url: Option<String>,
+    pub validation_api_key: Option<String>,
 }
 
 impl Config {
@@ -96,6 +98,9 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
 
+        let validation_service_url = std::env::var("VALIDATION_SERVICE_URL").ok();
+        let validation_api_key = std::env::var("VALIDATION_API_KEY").ok();
+
         Ok(Config {
             rpc_url,
             ws_url,
@@ -108,6 +113,8 @@ impl Config {
             sas_credential_pda,
             sas_schema_pda,
             sas_attestation_ttl_days,
+            validation_service_url,
+            validation_api_key,
         })
     }
 }
