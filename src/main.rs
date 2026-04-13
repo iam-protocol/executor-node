@@ -8,6 +8,7 @@ mod relayer;
 mod server;
 mod solana;
 mod status;
+mod validation;
 
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -62,6 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment_registry = Arc::new(CommitmentRegistry::new());
     tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
 
+    let http_client = Arc::new(reqwest::Client::new());
+    if let Some(url) = &config.validation_service_url {
+        tracing::info!(url = %url, "Validation service configured");
+    } else {
+        tracing::info!("Validation service not configured (VALIDATION_SERVICE_URL not set)");
+    }
+
     // Initialize SAS attestor if configured
     let sas_attestor = match (&config.sas_credential_pda, &config.sas_schema_pda) {
         (Some(cred), Some(schema)) => {
@@ -102,6 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         commitment_registry,
         sas_attestor,
         metrics: Arc::new(status::status_metrics::StatusMetrics::new()),
+        http_client,
+        validation_url: config.validation_service_url,
+        validation_api_key: config.validation_api_key,
     };
 
     let app = create_router(state, &config.cors_origins);
