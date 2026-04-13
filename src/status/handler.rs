@@ -16,6 +16,7 @@ pub struct StatusResponse {
     pub uptime_seconds: u64,
     pub verifications_relayed: u64,
     pub attestations_issued: u64,
+    pub validations_performed: u64,
     pub relayer_balance_lamports: Option<u64>,
     pub sas_configured: bool,
 }
@@ -60,6 +61,7 @@ pub async fn status_handler(
         uptime_seconds: now.saturating_sub(state.metrics.start_time()),
         verifications_relayed: state.metrics.verifications_relayed(),
         attestations_issued: state.metrics.attestations_issued(),
+        validations_performed: state.metrics.validations_performed(),
         relayer_balance_lamports,
         sas_configured: state.sas_attestor.is_some(),
     }))

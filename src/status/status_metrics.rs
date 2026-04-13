@@ -4,6 +4,7 @@ use std::sync::RwLock;
 pub struct StatusMetrics {
     total_verifications_relayed: AtomicU64,
     total_attestations_issued: AtomicU64,
+    total_validations_performed: AtomicU64,
     start_time: u64,
     balance_cache: RwLock<(u64, u64)>, // (balance, fetched_at) — updated atomically
 }
@@ -13,6 +14,7 @@ impl StatusMetrics {
         Self {
             total_verifications_relayed: AtomicU64::new(0),
             total_attestations_issued: AtomicU64::new(0),
+            total_validations_performed: AtomicU64::new(0),
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -33,6 +35,11 @@ impl StatusMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn increment_validations(&self) {
+        self.total_validations_performed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     // getters for the metrics
     pub fn verifications_relayed(&self) -> u64 {
         self.total_verifications_relayed.load(Ordering::Relaxed)
@@ -40,6 +47,10 @@ impl StatusMetrics {
 
     pub fn attestations_issued(&self) -> u64 {
         self.total_attestations_issued.load(Ordering::Relaxed)
+    }
+
+    pub fn validations_performed(&self) -> u64 {
+        self.total_validations_performed.load(Ordering::Relaxed)
     }
 
     pub fn start_time(&self) -> u64 {
