@@ -24,6 +24,9 @@ pub enum AppError {
 
     #[error("Attestation failed: {0}")]
     AttestationFailed(String),
+
+    #[error("Validation failed")]
+    ValidationFailed,
 }
 
 impl IntoResponse for AppError {
@@ -41,6 +44,9 @@ impl IntoResponse for AppError {
             }
             AppError::AttestationFailed(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
+            }
+            AppError::ValidationFailed => {
+                (StatusCode::BAD_REQUEST, "Verification failed".into())
             }
         };
 
