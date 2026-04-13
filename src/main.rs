@@ -8,6 +8,7 @@ mod relayer;
 mod server;
 mod solana;
 mod status;
+mod validation;
 
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -62,6 +63,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment_registry = Arc::new(CommitmentRegistry::new());
     tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
 
+    let validation_service = Arc::new(
+        iam_validation::ValidationService::from_env()
+            .map_err(|e| format!("Failed to initialize validation service: {e}"))?,
+    );
+    tracing::info!("Validation service initialized");
+
     // Initialize SAS attestor if configured
     let sas_attestor = match (&config.sas_credential_pda, &config.sas_schema_pda) {
         (Some(cred), Some(schema)) => {
@@ -94,6 +101,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Spawn background eviction task for stale validation registry entries
+    let validation_ref = Arc::clone(&validation_service);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            validation_ref.registry().evict_stale();
+        }
+    });
+
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
@@ -102,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         commitment_registry,
         sas_attestor,
         metrics: Arc::new(status::status_metrics::StatusMetrics::new()),
+        validation_service,
     };
 
     let app = create_router(state, &config.cors_origins);

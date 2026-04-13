@@ -18,6 +18,7 @@ use crate::relayer::handler::{health_handler, verify_handler};
 use crate::relayer::transaction::RelayerTransaction;
 use crate::status::handler::status_handler;
 use crate::status::status_metrics::StatusMetrics;
+use crate::validation::handler::validate_features_handler;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,6 +29,7 @@ pub struct AppState {
     pub commitment_registry: Arc<CommitmentRegistry>,
     pub sas_attestor: Option<Arc<SasAttestor>>,
     pub metrics: Arc<StatusMetrics>,
+    pub validation_service: Arc<iam_validation::ValidationService>,
 }
 
 async fn auth_middleware(
@@ -63,6 +65,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     let verify_routes = Router::new()
         .route("/verify", post(verify_handler))
         .route("/attest", post(attest_handler))
+        .route("/validate-features", post(validate_features_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
