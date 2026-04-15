@@ -22,6 +22,9 @@ pub enum AppError {
     #[error("Transaction failed: {0}")]
     TransactionFailed(String),
 
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     #[error("Attestation failed: {0}")]
     AttestationFailed(String),
 
@@ -41,6 +44,7 @@ impl IntoResponse for AppError {
             AppError::InsufficientQuota => {
                 (StatusCode::PAYMENT_REQUIRED, "Insufficient verification quota".into())
             }
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::SolanaRpc(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
             AppError::TransactionFailed(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())

@@ -14,6 +14,8 @@ use crate::integrator::tracker::IntegratorTracker;
 use crate::relayer::commitment_registry::CommitmentRegistry;
 use crate::attestation::handler::attest_handler;
 use crate::attestation::sas::SasAttestor;
+use crate::challenge::handler::challenge_handler;
+use crate::challenge::registry::ChallengeNonceRegistry;
 use crate::relayer::handler::{health_handler, verify_handler};
 use crate::relayer::transaction::RelayerTransaction;
 use crate::status::handler::status_handler;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub http_client: Arc<reqwest::Client>,
     pub validation_url: Option<String>,
     pub validation_api_key: Option<String>,
+    pub challenge_registry: Arc<ChallengeNonceRegistry>,
+    pub challenge_ttl_secs: u64,
 }
 
 async fn auth_middleware(
@@ -94,6 +98,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     let verify_routes = Router::new()
         .route("/verify", post(verify_handler))
         .route("/validate-features", post(validate_features_handler))
+        .route("/challenge", get(challenge_handler))
         .merge(attest_route)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

@@ -1,5 +1,6 @@
 mod attestation;
 mod auth;
+mod challenge;
 mod config;
 mod error;
 mod integrator;
@@ -14,6 +15,9 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 use attestation::sas::SasAttestor;
+use challenge::registry::ChallengeNonceRegistry;
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
 use config::Config;
 use integrator::tracker::IntegratorTracker;
 use listener::event_monitor::EventMonitor;
@@ -32,6 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env()?;
 
+    // Clone relayer keypair bytes before moving into SolanaClient (needed for SAS authority fallback)
+    let relayer_keypair_bytes = config.relayer_keypair.to_bytes();
     let solana_client = Arc::new(SolanaClient::new(&config.rpc_url, config.relayer_keypair));
 
     let balance = solana_client.get_balance().await?;
@@ -65,6 +71,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let commitment_registry = Arc::new(CommitmentRegistry::new());
     tracing::info!("Commitment registry initialized (in-memory, resets on restart)");
 
+    let challenge_registry = Arc::new(ChallengeNonceRegistry::new());
+    tracing::info!(
+        ttl_secs = config.challenge_ttl_secs,
+        "Challenge nonce registry initialized"
+    );
+
     let http_client = Arc::new(reqwest::Client::new());
     if let Some(url) = &config.validation_service_url {
         tracing::info!(url = %url, "Validation service configured");
@@ -75,9 +87,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize SAS attestor if configured
     let sas_attestor = match (&config.sas_credential_pda, &config.sas_schema_pda) {
         (Some(cred), Some(schema)) => {
+            // Use dedicated SAS authority keypair if configured, otherwise fall back to relayer
+            let authority = config.sas_authority_keypair.unwrap_or_else(|| {
+                tracing::info!("SAS authority keypair not set, falling back to relayer keypair");
+                Keypair::try_from(relayer_keypair_bytes.as_slice())
+                    .expect("relayer keypair bytes are valid")
+            });
             tracing::info!(
                 credential = %cred,
                 schema = %schema,
+                authority = %authority.pubkey(),
                 ttl_days = config.sas_attestation_ttl_days,
                 "SAS attestor initialized"
             );
@@ -86,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *schema,
                 config.sas_attestation_ttl_days,
                 Arc::clone(&solana_client),
+                authority,
             )))
         }
         _ => {
@@ -104,6 +124,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Spawn background eviction task for stale challenge nonces
+    let challenge_ref = Arc::clone(&challenge_registry);
+    let challenge_ttl = config.challenge_ttl_secs;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            challenge_ref.evict_stale(challenge_ttl);
+        }
+    });
+
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
@@ -116,6 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client,
         validation_url: config.validation_service_url,
         validation_api_key: config.validation_api_key,
+        challenge_registry,
+        challenge_ttl_secs: config.challenge_ttl_secs,
     };
 
     let app = create_router(state, &config.cors_origins);

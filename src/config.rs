@@ -15,6 +15,7 @@ pub struct Config {
     pub rpc_url: String,
     pub ws_url: String,
     pub relayer_keypair: Keypair,
+    pub sas_authority_keypair: Option<Keypair>,
     pub listen_addr: SocketAddr,
     pub api_keys: Vec<String>,
     pub rate_limit_per_minute: u32,
@@ -25,6 +26,7 @@ pub struct Config {
     pub sas_attestation_ttl_days: u64,
     pub validation_service_url: Option<String>,
     pub validation_api_key: Option<String>,
+    pub challenge_ttl_secs: u64,
 }
 
 impl Config {
@@ -85,6 +87,22 @@ impl Config {
             Err(_) => vec![],
         };
 
+        let sas_authority_keypair = if let Ok(json) = std::env::var("SAS_AUTHORITY_KEYPAIR") {
+            let bytes: Vec<u8> = serde_json::from_str(&json)
+                .map_err(|e| format!("SAS_AUTHORITY_KEYPAIR is not valid JSON: {e}"))?;
+            Some(
+                Keypair::try_from(bytes.as_slice())
+                    .map_err(|e| format!("SAS_AUTHORITY_KEYPAIR contains invalid keypair: {e}"))?,
+            )
+        } else if let Ok(path) = std::env::var("SAS_AUTHORITY_KEYPAIR_PATH") {
+            Some(
+                read_keypair_file(&path)
+                    .map_err(|e| format!("Failed to read SAS authority keypair from {path}: {e}"))?,
+            )
+        } else {
+            None
+        };
+
         let sas_credential_pda = std::env::var("SAS_CREDENTIAL_PDA")
             .ok()
             .and_then(|s| Pubkey::from_str(&s).ok());
@@ -101,10 +119,16 @@ impl Config {
         let validation_service_url = std::env::var("VALIDATION_SERVICE_URL").ok();
         let validation_api_key = std::env::var("VALIDATION_API_KEY").ok();
 
+        let challenge_ttl_secs: u64 = std::env::var("CHALLENGE_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
+
         Ok(Config {
             rpc_url,
             ws_url,
             relayer_keypair,
+            sas_authority_keypair,
             listen_addr,
             api_keys,
             rate_limit_per_minute,
@@ -115,6 +139,7 @@ impl Config {
             sas_attestation_ttl_days,
             validation_service_url,
             validation_api_key,
+            challenge_ttl_secs,
         })
     }
 }
