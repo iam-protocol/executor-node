@@ -25,6 +25,7 @@ pub struct AppState {
     pub relayer_tx: Arc<RelayerTransaction>,
     pub api_keys: Arc<Vec<String>>,
     pub rate_limiter: Arc<RateLimiter>,
+    pub attest_rate_limiter: Arc<RateLimiter>,
     pub tracker: Arc<IntegratorTracker>,
     pub commitment_registry: Arc<CommitmentRegistry>,
     pub sas_attestor: Option<Arc<SasAttestor>>,
@@ -61,13 +62,39 @@ async fn rate_limit_middleware(
     Ok(next.run(request).await)
 }
 
+async fn attest_rate_limit_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let key = request
+        .headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("authenticated");
+
+    if state.attest_rate_limiter.check(key).is_err() {
+        tracing::warn!(api_key = key, "Attestation rate limit exceeded");
+        return Err(AppError::RateLimited);
+    }
+
+    Ok(next.run(request).await)
+}
+
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
-    // Middleware order: auth runs first (outermost layer applied last),
-    // then rate limiting runs against validated keys only.
+    // Attest route with its own tighter rate limit (10/min)
+    let attest_route = Router::new()
+        .route("/attest", post(attest_handler))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            attest_rate_limit_middleware,
+        ));
+
+    // Standard routes with shared rate limit (60/min)
     let verify_routes = Router::new()
         .route("/verify", post(verify_handler))
-        .route("/attest", post(attest_handler))
         .route("/validate-features", post(validate_features_handler))
+        .merge(attest_route)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,

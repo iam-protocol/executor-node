@@ -43,13 +43,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let relayer_tx = Arc::new(RelayerTransaction::new(Arc::clone(&solana_client)));
 
-    // Initialize per-API-key rate limiter
+    // Initialize per-API-key rate limiters
     let rate_limiter = Arc::new(auth::rate_limit::RateLimiter::new(
         config.rate_limit_per_minute,
     ));
+    let attest_rate_limiter = Arc::new(auth::rate_limit::RateLimiter::new(10));
     tracing::info!(
         requests_per_minute = config.rate_limit_per_minute,
-        "Rate limiter initialized"
+        attest_per_minute = 10,
+        "Rate limiters initialized"
     );
 
     // Initialize integrator quota tracker
@@ -106,6 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
         rate_limiter,
+        attest_rate_limiter,
         tracker,
         commitment_registry,
         sas_attestor,
