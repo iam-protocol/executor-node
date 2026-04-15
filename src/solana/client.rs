@@ -116,4 +116,77 @@ impl SolanaClient {
 
         Err(AppError::TransactionFailed(last_error))
     }
+
+    /// Send a transaction signed by both the relayer (payer) and a separate authority.
+    /// If authority == relayer, uses a single signer to avoid duplicate signer errors.
+    pub async fn send_attestation_tx(
+        &self,
+        instructions: Vec<Instruction>,
+        authority: &Keypair,
+    ) -> Result<Signature, AppError> {
+        let mut backoff = INITIAL_BACKOFF;
+        let mut last_error = String::new();
+
+        let same_signer = authority.pubkey() == self.relayer_keypair.pubkey();
+
+        for attempt in 0..MAX_RETRIES {
+            let mut all_instructions =
+                vec![ComputeBudgetInstruction::set_compute_unit_limit(400_000)];
+            all_instructions.extend(instructions.clone());
+
+            let recent_blockhash = match self.rpc.get_latest_blockhash().await {
+                Ok(bh) => bh,
+                Err(e) => {
+                    last_error = e.to_string();
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            attempt,
+                            error = %last_error,
+                            "Blockhash fetch failed, retrying"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(AppError::SolanaRpc(last_error));
+                }
+            };
+
+            let tx = if same_signer {
+                Transaction::new_signed_with_payer(
+                    &all_instructions,
+                    Some(&self.relayer_keypair.pubkey()),
+                    &[&self.relayer_keypair],
+                    recent_blockhash,
+                )
+            } else {
+                Transaction::new_signed_with_payer(
+                    &all_instructions,
+                    Some(&self.relayer_keypair.pubkey()),
+                    &[&self.relayer_keypair, authority],
+                    recent_blockhash,
+                )
+            };
+
+            match self.rpc.send_and_confirm_transaction(&tx).await {
+                Ok(sig) => return Ok(sig),
+                Err(e) => {
+                    last_error = e.to_string();
+                    if attempt < MAX_RETRIES - 1 {
+                        tracing::warn!(
+                            attempt,
+                            error = %last_error,
+                            "Attestation transaction failed, retrying with fresh blockhash"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                    return Err(AppError::TransactionFailed(last_error));
+                }
+            }
+        }
+
+        Err(AppError::TransactionFailed(last_error))
+    }
 }

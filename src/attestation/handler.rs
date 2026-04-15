@@ -2,14 +2,24 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
 use std::str::FromStr;
 
 use crate::error::AppError;
 use crate::server::AppState;
 
+/// Maximum age of a signed attestation message (seconds).
+const ATTEST_MESSAGE_MAX_AGE_SECS: u64 = 60;
+
 #[derive(Deserialize)]
 pub struct AttestRequest {
     pub wallet_address: String,
+    #[serde(default)]
+    pub nonce: Option<Vec<u8>>,
+    #[serde(default)]
+    pub signature: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -35,7 +45,38 @@ pub async fn attest_handler(
         AppError::InvalidRequest(format!("Invalid wallet address: {}", req.wallet_address))
     })?;
 
-    // 3. Issue attestation
+    // 3. Validate server-issued challenge nonce
+    if let Some(nonce) = &req.nonce {
+        let nonce_arr: [u8; 32] = nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::InvalidRequest("Nonce must be 32 bytes".into()))?;
+
+        state
+            .challenge_registry
+            .validate_and_consume(&user_wallet, &nonce_arr, state.challenge_ttl_secs)
+            .map_err(|e| {
+                tracing::warn!(wallet = %user_wallet, error = %e, "Challenge nonce validation failed");
+                AppError::Forbidden(format!("Challenge validation failed: {e}"))
+            })?;
+    } else {
+        tracing::warn!(
+            wallet = %user_wallet,
+            "Attestation requested without server-issued nonce"
+        );
+    }
+
+    // 4. Verify wallet ownership via signed message
+    if let (Some(sig_str), Some(msg)) = (&req.signature, &req.message) {
+        verify_wallet_signature(&user_wallet, sig_str, msg)?;
+    } else {
+        tracing::warn!(
+            wallet = %user_wallet,
+            "Attestation requested without wallet ownership proof"
+        );
+    }
+
+    // 5. Issue attestation
     match attestor.issue_attestation(&user_wallet).await {
         Ok(sig) => {
             tracing::info!(
@@ -65,4 +106,57 @@ pub async fn attest_handler(
             }))
         }
     }
+}
+
+/// Verify an ed25519 signature proving wallet ownership.
+/// Message format: "IAM-ATTEST:{wallet_address}:{timestamp_secs}"
+fn verify_wallet_signature(
+    wallet: &Pubkey,
+    signature_hex: &str,
+    message: &str,
+) -> Result<(), AppError> {
+    // 1. Validate message format before expensive signature verification
+    let parts: Vec<&str> = message.split(':').collect();
+    if parts.len() != 3 || parts[0] != "IAM-ATTEST" {
+        return Err(AppError::Forbidden("Invalid attestation message format".into()));
+    }
+
+    if parts[1] != wallet.to_string() {
+        return Err(AppError::Forbidden("Message wallet does not match request".into()));
+    }
+
+    let msg_timestamp: u64 = parts[2]
+        .parse()
+        .map_err(|_| AppError::Forbidden("Invalid timestamp in message".into()))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_secs();
+
+    if now.abs_diff(msg_timestamp) > ATTEST_MESSAGE_MAX_AGE_SECS {
+        return Err(AppError::Forbidden("Attestation message has expired".into()));
+    }
+
+    // 2. Decode hex signature and verify ed25519
+    let sig_bytes: Vec<u8> = (0..signature_hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(
+                signature_hex.get(i..i + 2).unwrap_or("xx"),
+                16,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::Forbidden("Invalid signature hex encoding".into()))?;
+
+    let sig = Signature::try_from(sig_bytes.as_slice()).map_err(|_| {
+        AppError::Forbidden("Invalid signature length".into())
+    })?;
+
+    if !sig.verify(wallet.as_ref(), message.as_bytes()) {
+        return Err(AppError::Forbidden("Wallet signature verification failed".into()));
+    }
+
+    Ok(())
 }

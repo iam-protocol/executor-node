@@ -6,6 +6,8 @@ use solana_attestation_service_client::instructions::{
 };
 use solana_attestation_service_client::programs::SOLANA_ATTESTATION_SERVICE_ID;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
 
 use crate::error::AppError;
 use crate::solana::client::SolanaClient;
@@ -19,11 +21,14 @@ pub struct IdentityStateData {
 }
 
 /// Issues SAS attestations after successful IAM verification.
+/// Uses a dedicated authority keypair (separate from the relayer/payer)
+/// for signing attestation instructions.
 pub struct SasAttestor {
     credential_pda: Pubkey,
     schema_pda: Pubkey,
     ttl_days: u64,
     client: Arc<SolanaClient>,
+    authority_keypair: Keypair,
 }
 
 impl SasAttestor {
@@ -32,12 +37,14 @@ impl SasAttestor {
         schema_pda: Pubkey,
         ttl_days: u64,
         client: Arc<SolanaClient>,
+        authority_keypair: Keypair,
     ) -> Self {
         Self {
             credential_pda,
             schema_pda,
             ttl_days,
             client,
+            authority_keypair,
         }
     }
 
@@ -77,7 +84,7 @@ impl SasAttestor {
             let event_authority_pda = find_event_authority_pda();
             let close_ix = CloseAttestationBuilder::new()
                 .payer(self.client.relayer_pubkey())
-                .authority(self.client.relayer_pubkey())
+                .authority(self.authority_keypair.pubkey())
                 .credential(self.credential_pda)
                 .attestation(attestation_pda)
                 .event_authority(event_authority_pda)
@@ -103,7 +110,7 @@ impl SasAttestor {
 
         let create_ix = CreateAttestationBuilder::new()
             .payer(self.client.relayer_pubkey())
-            .authority(self.client.relayer_pubkey())
+            .authority(self.authority_keypair.pubkey())
             .credential(self.credential_pda)
             .schema(self.schema_pda)
             .attestation(attestation_pda)
@@ -113,8 +120,11 @@ impl SasAttestor {
             .instruction();
         instructions.push(create_ix);
 
-        // 6. Submit transaction
-        let sig = self.client.send_verification_tx(instructions).await?;
+        // 6. Submit transaction (relayer pays, authority signs)
+        let sig = self
+            .client
+            .send_attestation_tx(instructions, &self.authority_keypair)
+            .await?;
         Ok(sig.to_string())
     }
 }
