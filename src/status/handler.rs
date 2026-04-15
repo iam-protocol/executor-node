@@ -13,12 +13,19 @@ const BALANCE_CACHE_TTL_SECONDS: u64 = 30;
 
 #[derive(Serialize)]
 pub struct StatusResponse {
-    pub uptime_seconds: u64,
-    pub verifications_relayed: u64,
-    pub attestations_issued: u64,
-    pub validations_performed: u64,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verifications_relayed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestations_issued: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validations_performed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub relayer_balance_lamports: Option<u64>,
-    pub sas_configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sas_configured: Option<bool>,
 }
 
 pub async fn status_handler(
@@ -30,39 +37,45 @@ pub async fn status_handler(
         .unwrap_or_default()
         .as_secs();
 
-    let relayer_balance_lamports = match headers
+    let is_authenticated = headers
         .get("X-API-Key")
         .and_then(|value| value.to_str().ok())
-    {
-        Some(key) => {
+        .map(|key| {
             let key_bytes = key.as_bytes();
-            let is_valid = state.api_keys.iter().any(|candidate| {
+            state.api_keys.iter().any(|candidate| {
                 candidate.len() == key_bytes.len() && candidate.as_bytes().ct_eq(key_bytes).into()
-            });
+            })
+        })
+        .unwrap_or(false);
 
-            if is_valid {
-                let (cached_balance, fetched_at) = state.metrics.cached_balance();
+    if !is_authenticated {
+        return Ok(Json(StatusResponse {
+            status: "ok",
+            uptime_seconds: None,
+            verifications_relayed: None,
+            attestations_issued: None,
+            validations_performed: None,
+            relayer_balance_lamports: None,
+            sas_configured: None,
+        }));
+    }
 
-                if now.saturating_sub(fetched_at) < BALANCE_CACHE_TTL_SECONDS {
-                    Some(cached_balance)
-                } else {
-                    let balance = state.relayer_tx.get_balance().await?;
-                    state.metrics.update_cached_balance(balance, now);
-                    Some(balance)
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
+    let (cached_balance, fetched_at) = state.metrics.cached_balance();
+    let balance = if now.saturating_sub(fetched_at) < BALANCE_CACHE_TTL_SECONDS {
+        cached_balance
+    } else {
+        let balance = state.relayer_tx.get_balance().await?;
+        state.metrics.update_cached_balance(balance, now);
+        balance
     };
 
     Ok(Json(StatusResponse {
-        uptime_seconds: now.saturating_sub(state.metrics.start_time()),
-        verifications_relayed: state.metrics.verifications_relayed(),
-        attestations_issued: state.metrics.attestations_issued(),
-        validations_performed: state.metrics.validations_performed(),
-        relayer_balance_lamports,
-        sas_configured: state.sas_attestor.is_some(),
+        status: "ok",
+        uptime_seconds: Some(now.saturating_sub(state.metrics.start_time())),
+        verifications_relayed: Some(state.metrics.verifications_relayed()),
+        attestations_issued: Some(state.metrics.attestations_issued()),
+        validations_performed: Some(state.metrics.validations_performed()),
+        relayer_balance_lamports: Some(balance),
+        sas_configured: Some(state.sas_attestor.is_some()),
     }))
 }
