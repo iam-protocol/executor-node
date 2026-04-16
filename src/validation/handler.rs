@@ -12,6 +12,14 @@ use crate::server::AppState;
 pub struct ValidateFeaturesRequest {
     pub features: Vec<f64>,
     pub wallet_id: String,
+    /// F0 contour per audio frame. Forwarded to the validation service for
+    /// Tier 2 cross-modal temporal analysis. Absent for older SDK versions.
+    #[serde(default)]
+    pub f0_contour: Option<Vec<f64>>,
+    /// Acceleration magnitude time-series, resampled to match `f0_contour` length.
+    /// Paired with `f0_contour` for lagged cross-correlation.
+    #[serde(default)]
+    pub accel_magnitude: Option<Vec<f64>>,
 }
 
 #[derive(Serialize)]
@@ -54,13 +62,16 @@ pub async fn validate_features_handler(
         }
     };
 
-    // Build request to internal validation service
+    // Build request to internal validation service. Forward time-series fields
+    // unchanged — the validation service handles absence (old SDK versions).
     let mut request = state
         .http_client
         .post(format!("{validation_url}/validate"))
         .json(&serde_json::json!({
             "features": req.features,
             "wallet_id": req.wallet_id,
+            "f0_contour": req.f0_contour,
+            "accel_magnitude": req.accel_magnitude,
         }))
         .timeout(std::time::Duration::from_secs(3));
 
