@@ -1,54 +1,50 @@
-//! Server-side challenge phrase generator (master-list #89).
+//! Server-side challenge phrase generator (master-list #89, v3).
 //!
-//! Ports `pulse-sdk/src/challenge/phrase.ts:generatePhrase` verbatim so the
-//! server can issue the phrase alongside the challenge nonce. Without server
-//! issuance, phrase content binding is defeated trivially: an attacker would
-//! submit their own phrase matching whatever audio they captured.
+//! Picks 5 random words from `word_dict::WORDS` — a curated dictionary of
+//! ~1,200 neutral/positive English words (4-8 letters, 1-3 syllables, no
+//! homophones, no substring collisions). The same dictionary is vendored
+//! into `iam-validation/src/word_dict.rs` so the validator knows what the
+//! executor could have issued; the two files are kept in sync by the
+//! shared curation script at `iam-validation/scripts/curate-dictionary.py`.
 //!
-//! The 70-syllable alphabet is kept byte-for-byte identical to the SDK array
-//! so that `iam-validation`'s precomputed syllable→Metaphone lookup table
-//! covers every syllable this generator emits. Any drift between the two
-//! lists would cause `iam_validation::phrase_binding::compute_expected_phonemes`
-//! to log warnings and emit empty token streams, degrading the check to skip.
+//! Why server-issued rather than client-issued: without server issuance,
+//! phrase content binding is trivially defeated — an attacker submits
+//! their own phrase matching whatever audio they captured. Server-issued
+//! phrases are bound to the challenge nonce at
+//! `executor-node/src/challenge/registry.rs` and verified by the
+//! validation service against submitted audio.
 //!
-//! Each phrase is 5 words (default) of 2-3 syllables each, rolled fresh via
-//! `rand::thread_rng()` on every call. Output shape:
+//! Output shape:
 //!
 //! ```text
-//! "bada lita mupe ruso poto"
+//! "elephant mountain coffee yellow bicycle"
 //! ```
 
-use rand::Rng;
+use rand::seq::SliceRandom;
 
-/// 70 phonetically-balanced syllables mirroring
-/// `pulse-sdk/src/challenge/phrase.ts:3-11`. Order does not matter downstream;
-/// only set equality with the SDK array matters.
-const SYLLABLES: &[&str] = &[
-    "ba", "da", "fa", "ga", "ha", "ja", "ka", "la", "ma", "na", "pa", "ra",
-    "sa", "ta", "wa", "za", "be", "de", "fe", "ge", "ke", "le", "me", "ne",
-    "pe", "re", "se", "te", "we", "ze", "bi", "di", "fi", "gi", "ki", "li",
-    "mi", "ni", "pi", "ri", "si", "ti", "wi", "zi", "bo", "do", "fo", "go",
-    "ko", "lo", "mo", "no", "po", "ro", "so", "to", "wo", "zo", "bu", "du",
-    "fu", "gu", "ku", "lu", "mu", "nu", "pu", "ru", "su", "tu",
-];
+use super::word_dict;
 
-/// Generate a random phonetically-balanced phrase of `word_count` words.
-/// Each word is 2-3 syllables concatenated. Uses `rand::thread_rng()` for
-/// unpredictable output (equivalent of the SDK's `crypto.getRandomValues`).
+/// Generate a random phrase of `word_count` space-separated words drawn
+/// uniformly from the curated dictionary. Returns an empty string when
+/// `word_count == 0` (edge case; caller should request at least 1).
+///
+/// Uses `rand::thread_rng()` for unpredictable output (cryptographically
+/// adequate for challenge issuance; the phrase is bound to a fresh nonce
+/// with a 60s TTL, so the window for an attacker to exploit predicted
+/// output is narrow even without a CSPRNG).
 pub fn generate_phrase(word_count: usize) -> String {
-    let mut rng = rand::thread_rng();
-    let mut words: Vec<String> = Vec::with_capacity(word_count);
-
-    for _ in 0..word_count {
-        let syllable_count = 2 + rng.gen_range(0..2); // 2 or 3 syllables per word
-        let mut word = String::with_capacity(syllable_count * 2);
-        for _ in 0..syllable_count {
-            word.push_str(SYLLABLES[rng.gen_range(0..SYLLABLES.len())]);
-        }
-        words.push(word);
+    if word_count == 0 {
+        return String::new();
     }
-
-    words.join(" ")
+    let mut rng = rand::thread_rng();
+    // `choose_multiple` samples without replacement — our dictionary has
+    // 1,200+ entries so it always returns exactly `word_count` items in
+    // practice. `.copied()` turns iterator items from `&&str` to `&str`.
+    word_dict::WORDS
+        .choose_multiple(&mut rng, word_count)
+        .copied()
+        .collect::<Vec<&str>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -56,50 +52,66 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generates_five_words_by_default() {
+    fn generates_requested_word_count() {
         let phrase = generate_phrase(5);
         let words: Vec<&str> = phrase.split_whitespace().collect();
         assert_eq!(words.len(), 5);
     }
 
     #[test]
-    fn each_word_has_4_or_6_chars() {
-        let phrase = generate_phrase(5);
-        for word in phrase.split_whitespace() {
-            let len = word.len();
-            assert!(len == 4 || len == 6, "word length must be 4 or 6, got {len} for '{word}'");
+    fn zero_word_count_returns_empty() {
+        assert_eq!(generate_phrase(0), "");
+    }
+
+    #[test]
+    fn every_word_is_in_dictionary() {
+        // Run 20 generations — if any word ever falls outside the dictionary,
+        // the phrase_gen / word_dict contract is broken.
+        for _ in 0..20 {
+            let phrase = generate_phrase(5);
+            for word in phrase.split_whitespace() {
+                assert!(
+                    word_dict::WORDS.contains(&word),
+                    "generated word {word:?} is not in the curated dictionary"
+                );
+            }
         }
     }
 
     #[test]
     fn successive_calls_differ() {
-        // Not a hard guarantee — theoretically two calls could produce the
-        // same phrase — but with 70^5 to 70^15 possibilities per word and
-        // 5 words, collision is astronomically unlikely.
+        // Not a hard guarantee — two calls could theoretically produce the
+        // same 5-word phrase — but with 1,200^5 ≈ 2.5×10^15 phrase space
+        // collision is astronomically unlikely.
         let a = generate_phrase(5);
         let b = generate_phrase(5);
         assert_ne!(a, b);
     }
 
     #[test]
-    fn every_syllable_is_in_the_alphabet() {
-        let phrase = generate_phrase(5);
-        for word in phrase.split_whitespace() {
-            let bytes = word.as_bytes();
-            let mut i = 0;
-            while i + 2 <= bytes.len() {
-                let syl = &word[i..i + 2];
-                assert!(
-                    SYLLABLES.contains(&syl),
-                    "syllable '{syl}' not in alphabet"
-                );
-                i += 2;
-            }
-        }
+    fn dictionary_has_expected_size() {
+        // Drift guard: the iam-validation and executor-node copies of
+        // word_dict.rs must stay identical. If this assertion fails, one
+        // was regenerated and the other wasn't. Rerun
+        // `iam-validation/scripts/curate-dictionary.py` to resync both.
+        assert!(
+            word_dict::WORDS.len() >= 900,
+            "word dictionary shrunk below 900; drift likely"
+        );
+        assert!(
+            word_dict::WORDS.len() <= 1800,
+            "word dictionary grew above 1800; drift likely"
+        );
     }
 
     #[test]
-    fn syllable_count_is_seventy() {
-        assert_eq!(SYLLABLES.len(), 70);
+    fn phrase_contains_only_ascii_lowercase_and_spaces() {
+        let phrase = generate_phrase(5);
+        for c in phrase.chars() {
+            assert!(
+                c.is_ascii_lowercase() || c == ' ',
+                "unexpected char {c:?} in phrase {phrase:?}"
+            );
+        }
     }
 }
