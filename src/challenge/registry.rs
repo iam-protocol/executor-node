@@ -7,10 +7,11 @@ use crate::challenge::phrase_gen;
 
 struct NonceEntry {
     nonce: [u8; 32],
-    /// Server-issued challenge phrase (nonsense syllables) bound to this
-    /// nonce for master-list #89 content binding. The wallet is shown this
-    /// phrase on the client; `/validate-features` looks it up here to pass
-    /// to the validation service for STT match.
+    /// Server-issued challenge phrase (5 words drawn from the curated
+    /// dictionary at `src/challenge/word_dict.rs`) bound to this nonce for
+    /// master-list #89 content binding. The wallet is shown this phrase on
+    /// the client; `/validate-features` looks it up here to pass to the
+    /// validation service for word-level edit-distance match.
     phrase: String,
     issued_at: Instant,
 }
