@@ -132,7 +132,7 @@ async function main() {
         payer: authority,
         name: schemaName,
         credential: credentialPda,
-        description: "IAM Protocol Proof-of-Humanity attestation",
+        description: "IAM Protocol Proof-of-Personhood attestation",
         fieldNames: ["isHuman", "trustScore", "verifiedAt", "mode"],
         schema: schemaPda,
         layout: Buffer.from([10, 1, 8, 12]), // Bool=10, U16=1, I64=8, String=12
