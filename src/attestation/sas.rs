@@ -20,7 +20,7 @@ pub struct IdentityStateData {
     pub last_verification_timestamp: i64,
 }
 
-/// Issues SAS attestations after successful IAM verification.
+/// Issues SAS attestations after successful Entros verification.
 /// Uses a dedicated authority keypair (separate from the relayer/payer)
 /// for signing attestation instructions.
 pub struct SasAttestor {
@@ -160,7 +160,7 @@ fn find_event_authority_pda() -> Pubkey {
 
 /// Deserialize trust_score and last_verification_timestamp from raw IdentityState account data.
 ///
-/// Layout (from protocol-core iam-anchor):
+/// Layout (from protocol-core entros-anchor):
 ///   8 bytes: Anchor discriminator
 ///  32 bytes: owner (Pubkey)
 ///   8 bytes: creation_timestamp (i64)

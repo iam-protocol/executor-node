@@ -1,5 +1,5 @@
 /**
- * One-time setup script: Create IAM credential + schema on Solana devnet
+ * One-time setup script: Create Entros credential + schema on Solana devnet
  * for the Solana Attestation Service (SAS) integration.
  *
  * Run: cd executor-node/scripts && npm install && npm run setup
@@ -86,9 +86,9 @@ async function main() {
     return getSignatureFromTransaction(signedTx);
   }
 
-  // 1. Create IAM Credential
-  console.log("\n--- Creating IAM Credential ---");
-  const credentialName = "iam-protocol";
+  // 1. Create Entros Credential
+  console.log("\n--- Creating Entros Credential ---");
+  const credentialName = "entros-protocol";
   const [credentialPda] = await deriveCredentialPda({
     authority: authority.address,
     name: credentialName,
@@ -111,8 +111,8 @@ async function main() {
     console.log(`Credential created: ${sig}`);
   }
 
-  // 2. Create IAM Schema
-  console.log("\n--- Creating IAM Schema ---");
+  // 2. Create Entros Schema
+  console.log("\n--- Creating Entros Schema ---");
   const schemaName = "iam-humanity-v2";
   const schemaVersion = 1;
   const [schemaPda] = await deriveSchemaPda({
@@ -132,7 +132,7 @@ async function main() {
         payer: authority,
         name: schemaName,
         credential: credentialPda,
-        description: "IAM Protocol Proof-of-Personhood attestation",
+        description: "Entros Protocol Proof-of-Personhood attestation",
         fieldNames: ["isHuman", "trustScore", "verifiedAt", "mode"],
         schema: schemaPda,
         layout: Buffer.from([10, 1, 8, 12]), // Bool=10, U16=1, I64=8, String=12

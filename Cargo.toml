@@ -3,7 +3,7 @@ name = "executor-node"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-description = "IAM Protocol executor node — relayer service for walletless verification"
+description = "Entros Protocol executor node — relayer service for walletless verification"
 
 [dependencies]
 axum = "0.8"

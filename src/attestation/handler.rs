@@ -109,7 +109,7 @@ pub async fn attest_handler(
 }
 
 /// Verify an ed25519 signature proving wallet ownership.
-/// Message format: "IAM-ATTEST:{wallet_address}:{timestamp_secs}"
+/// Message format: "Entros-ATTEST:{wallet_address}:{timestamp_secs}"
 fn verify_wallet_signature(
     wallet: &Pubkey,
     signature_hex: &str,
@@ -117,7 +117,7 @@ fn verify_wallet_signature(
 ) -> Result<(), AppError> {
     // 1. Validate message format before expensive signature verification
     let parts: Vec<&str> = message.split(':').collect();
-    if parts.len() != 3 || parts[0] != "IAM-ATTEST" {
+    if parts.len() != 3 || parts[0] != "Entros-ATTEST" {
         return Err(AppError::Forbidden("Invalid attestation message format".into()));
     }
 

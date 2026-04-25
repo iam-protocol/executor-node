@@ -1,12 +1,12 @@
 # executor-node
 
-IAM Protocol executor node. Validation server and relayer service for the IAM Protocol. Generates signed challenges, validates behavioral features server-side using proprietary models, issues SAS attestations, and relays walletless verification transactions to Solana.
+Entros Protocol executor node. Validation server and relayer service for the Entros Protocol. Generates signed challenges, validates behavioral features server-side using proprietary models, issues SAS attestations, and relays walletless verification transactions to Solana.
 
 ## Architecture
 
 The executor serves two roles:
 
-1. **Validation server** — receives 134 statistical features from the Pulse SDK, runs proprietary validation models (loaded from the private `iam-validation` crate), performs cross-wallet Sybil detection via the fingerprint registry, and issues signed challenges.
+1. **Validation server** — receives 134 statistical features from the Pulse SDK, runs proprietary validation models (loaded from the private `entros-validation` crate), performs cross-wallet Sybil detection via the fingerprint registry, and issues signed challenges.
 
 2. **Walletless relayer** — accepts ZK proofs and submits on-chain transactions for users without wallets (liveness-check tier). API key required.
 
