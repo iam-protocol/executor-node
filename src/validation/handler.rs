@@ -20,6 +20,17 @@ pub struct ValidateFeaturesRequest {
     /// Paired with `f0_contour` for lagged cross-correlation.
     #[serde(default)]
     pub accel_magnitude: Option<Vec<f64>>,
+    /// Base64-encoded 16-bit PCM audio samples (mono). Forwarded unchanged
+    /// to the validation service for phrase content binding (master-list
+    /// #89). Absent for older SDK versions.
+    #[serde(default)]
+    pub audio_samples_b64: Option<String>,
+    /// Native sample rate of the transmitted audio. Forwarded unchanged to
+    /// the validation service, which resamples to 16kHz if the browser
+    /// delivered a rate other than the SDK target (common on iOS Safari
+    /// with Bluetooth codec negotiation).
+    #[serde(default)]
+    pub audio_sample_rate_hz: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -40,12 +51,11 @@ pub async fn validate_features_handler(
         .unwrap_or("authenticated")
         .to_string();
 
-    if Pubkey::from_str(&req.wallet_id).is_err() {
-        return Err(AppError::InvalidRequest(format!(
-            "invalid wallet_id: {}",
-            req.wallet_id
-        )));
-    }
+    // Parse the wallet once. Valid wallets proceed; malformed inputs are
+    // rejected before touching the rate limiter or validation service.
+    let wallet = Pubkey::from_str(&req.wallet_id).map_err(|_| {
+        AppError::InvalidRequest(format!("invalid wallet_id: {}", req.wallet_id))
+    })?;
 
     let remaining = state.tracker.check_and_deduct(&api_key)?;
 
@@ -62,8 +72,22 @@ pub async fn validate_features_handler(
         }
     };
 
-    // Build request to internal validation service. Forward time-series fields
-    // unchanged — the validation service handles absence (old SDK versions).
+    // Look up the challenge phrase for this wallet so the validation service
+    // can match transcription against it (master-list #89). If no challenge
+    // was issued (old SDK path) or it has aged out, forward `None` — the
+    // validation service treats missing phrase as skip, preserving backward
+    // compatibility for pre-0.10.0 SDK clients.
+    let expected_phrase = state
+        .challenge_registry
+        .peek_phrase(&wallet, state.challenge_ttl_secs);
+
+    // Build request to internal validation service. Forward time-series and
+    // audio fields unchanged — the validation service handles absence of any
+    // field (old SDK versions).
+    //
+    // Whisper-tiny inference adds ~1s to the validation round trip. Bump the
+    // client-side timeout accordingly (3s → 8s) so legitimate audio payloads
+    // don't time out before transcription completes.
     let mut request = state
         .http_client
         .post(format!("{validation_url}/validate"))
@@ -72,8 +96,11 @@ pub async fn validate_features_handler(
             "wallet_id": req.wallet_id,
             "f0_contour": req.f0_contour,
             "accel_magnitude": req.accel_magnitude,
+            "audio_samples_b64": req.audio_samples_b64,
+            "audio_sample_rate_hz": req.audio_sample_rate_hz,
+            "expected_phrase": expected_phrase,
         }))
-        .timeout(std::time::Duration::from_secs(3));
+        .timeout(std::time::Duration::from_secs(8));
 
     // Add bearer token if configured
     if let Some(key) = &state.validation_api_key {

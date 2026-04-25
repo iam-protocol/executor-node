@@ -16,6 +16,11 @@ pub struct ChallengeRequest {
 pub struct ChallengeResponse {
     pub nonce: Vec<u8>,
     pub expires_in: u64,
+    /// Server-issued nonsense phrase the user must speak aloud. Bound to the
+    /// nonce in `ChallengeNonceRegistry`; `/validate-features` looks it up
+    /// via `peek_phrase(wallet, ttl)` and forwards it to the validation
+    /// service for STT content matching (master-list #89).
+    pub phrase: String,
 }
 
 pub async fn challenge_handler(
@@ -26,12 +31,13 @@ pub async fn challenge_handler(
         AppError::InvalidRequest(format!("Invalid wallet address: {}", req.wallet))
     })?;
 
-    let nonce = state.challenge_registry.issue(wallet);
+    let (nonce, phrase) = state.challenge_registry.issue(wallet);
 
-    tracing::debug!(wallet = %wallet, "Challenge nonce issued");
+    tracing::debug!(wallet = %wallet, "Challenge nonce and phrase issued");
 
     Ok(Json(ChallengeResponse {
         nonce: nonce.to_vec(),
         expires_in: state.challenge_ttl_secs,
+        phrase,
     }))
 }

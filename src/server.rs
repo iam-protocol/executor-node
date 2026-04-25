@@ -134,11 +134,13 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
         .merge(verify_routes)
-        // 256KB covers the full MAX_CAPTURE_MS=60s path from the SDK:
-        // 6000 F0 frames + 6000 accel frames × ~20 JSON chars/f64 ≈ 240KB,
-        // plus the 134-element feature vector and metadata. Rate-limiting
-        // (60/min/key) bounds any DoS exposure regardless of body size.
-        .layer(DefaultBodyLimit::max(262144))
+        // 1MB covers the MAX_CAPTURE_MS=60s path from the SDK plus the
+        // base64-encoded audio payload for phrase content binding (#89):
+        // 12s @ 16kHz × 2 bytes × 4/3 base64 overhead ≈ 512KB. The 134-
+        // element feature vector + F0/accel time-series still fit under the
+        // previous 256KB; audio is the only reason to grow the limit.
+        // Rate-limiting (60/min/key) bounds DoS exposure regardless.
+        .layer(DefaultBodyLimit::max(1_048_576))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

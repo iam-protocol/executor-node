@@ -3,8 +3,15 @@ use solana_sdk::pubkey::Pubkey;
 use std::fmt;
 use std::time::Instant;
 
+use crate::challenge::phrase_gen;
+
 struct NonceEntry {
     nonce: [u8; 32],
+    /// Server-issued challenge phrase (nonsense syllables) bound to this
+    /// nonce for master-list #89 content binding. The wallet is shown this
+    /// phrase on the client; `/validate-features` looks it up here to pass
+    /// to the validation service for STT match.
+    phrase: String,
     issued_at: Instant,
 }
 
@@ -44,18 +51,38 @@ impl ChallengeNonceRegistry {
         }
     }
 
-    /// Issue a new challenge nonce for the given wallet.
+    /// Issue a new challenge nonce + phrase for the given wallet.
     /// Overwrites any existing outstanding challenge for this wallet.
-    pub fn issue(&self, wallet: Pubkey) -> [u8; 32] {
+    /// Returns the nonce bytes and the generated phrase; both travel back
+    /// to the client via the `/challenge` response.
+    pub fn issue(&self, wallet: Pubkey) -> ([u8; 32], String) {
         let nonce: [u8; 32] = rand::random();
+        let phrase = phrase_gen::generate_phrase(5);
         self.entries.insert(
             wallet,
             NonceEntry {
                 nonce,
+                phrase: phrase.clone(),
                 issued_at: Instant::now(),
             },
         );
-        nonce
+        (nonce, phrase)
+    }
+
+    /// Look up the issued phrase for a wallet without consuming the entry.
+    /// Returns `None` if no challenge is outstanding OR the entry has
+    /// already aged past `max_age_secs` (the caller usually doesn't care
+    /// — stale phrases won't match transcription either way, so phrase
+    /// binding simply returns skip in that case).
+    ///
+    /// Read-only: does not mutate the registry. `validate_and_consume` at
+    /// `/attest` remains the sole consumer of nonces.
+    pub fn peek_phrase(&self, wallet: &Pubkey, max_age_secs: u64) -> Option<String> {
+        let entry = self.entries.get(wallet)?;
+        if entry.issued_at.elapsed().as_secs() > max_age_secs {
+            return None;
+        }
+        Some(entry.phrase.clone())
     }
 
     /// Validate that the nonce was server-issued for this wallet and is
@@ -107,18 +134,60 @@ mod tests {
     }
 
     #[test]
-    fn issue_returns_nonce() {
+    fn issue_returns_nonce_and_phrase() {
         let registry = ChallengeNonceRegistry::new();
         let wallet = test_wallet();
-        let nonce = registry.issue(wallet);
+        let (nonce, phrase) = registry.issue(wallet);
         assert_ne!(nonce, [0u8; 32]);
+        assert!(!phrase.is_empty());
+        let words: Vec<&str> = phrase.split_whitespace().collect();
+        assert_eq!(words.len(), 5, "phrase should be 5 words");
     }
 
     #[test]
     fn validate_and_consume_succeeds() {
         let registry = ChallengeNonceRegistry::new();
         let wallet = test_wallet();
-        let nonce = registry.issue(wallet);
+        let (nonce, _) = registry.issue(wallet);
+        assert!(registry.validate_and_consume(&wallet, &nonce, 60).is_ok());
+    }
+
+    #[test]
+    fn peek_phrase_returns_issued_phrase() {
+        let registry = ChallengeNonceRegistry::new();
+        let wallet = test_wallet();
+        let (_, phrase) = registry.issue(wallet);
+        assert_eq!(registry.peek_phrase(&wallet, 60).as_ref(), Some(&phrase));
+    }
+
+    #[test]
+    fn peek_phrase_returns_none_for_unknown_wallet() {
+        let registry = ChallengeNonceRegistry::new();
+        let wallet = test_wallet();
+        assert!(registry.peek_phrase(&wallet, 60).is_none());
+    }
+
+    #[test]
+    fn peek_phrase_returns_none_for_stale_entry() {
+        let registry = ChallengeNonceRegistry::new();
+        let wallet = test_wallet();
+        registry.issue(wallet);
+
+        if let Some(mut entry) = registry.entries.get_mut(&wallet) {
+            entry.issued_at = Instant::now() - std::time::Duration::from_secs(120);
+        }
+
+        assert!(registry.peek_phrase(&wallet, 60).is_none());
+    }
+
+    #[test]
+    fn peek_phrase_does_not_consume() {
+        let registry = ChallengeNonceRegistry::new();
+        let wallet = test_wallet();
+        let (nonce, _) = registry.issue(wallet);
+        // Peeking multiple times leaves the entry consumable.
+        assert!(registry.peek_phrase(&wallet, 60).is_some());
+        assert!(registry.peek_phrase(&wallet, 60).is_some());
         assert!(registry.validate_and_consume(&wallet, &nonce, 60).is_ok());
     }
 
@@ -126,7 +195,7 @@ mod tests {
     fn validate_consumes_entry() {
         let registry = ChallengeNonceRegistry::new();
         let wallet = test_wallet();
-        let nonce = registry.issue(wallet);
+        let (nonce, _) = registry.issue(wallet);
         registry.validate_and_consume(&wallet, &nonce, 60).unwrap();
         // Second use fails
         assert!(matches!(
@@ -162,7 +231,7 @@ mod tests {
     fn validate_expired_fails() {
         let registry = ChallengeNonceRegistry::new();
         let wallet = test_wallet();
-        let nonce = registry.issue(wallet);
+        let (nonce, _) = registry.issue(wallet);
 
         // Manually age the entry
         if let Some(mut entry) = registry.entries.get_mut(&wallet) {
@@ -179,8 +248,8 @@ mod tests {
     fn new_issue_overwrites_previous() {
         let registry = ChallengeNonceRegistry::new();
         let wallet = test_wallet();
-        let nonce1 = registry.issue(wallet);
-        let nonce2 = registry.issue(wallet);
+        let (nonce1, _) = registry.issue(wallet);
+        let (nonce2, _) = registry.issue(wallet);
         // Old nonce is gone
         assert!(registry.validate_and_consume(&wallet, &nonce1, 60).is_err());
         // New nonce works
@@ -215,8 +284,8 @@ mod tests {
         let registry = ChallengeNonceRegistry::new();
         let wallet1 = test_wallet();
         let wallet2 = test_wallet();
-        let nonce1 = registry.issue(wallet1);
-        let nonce2 = registry.issue(wallet2);
+        let (nonce1, _) = registry.issue(wallet1);
+        let (nonce2, _) = registry.issue(wallet2);
         assert!(registry.validate_and_consume(&wallet1, &nonce1, 60).is_ok());
         assert!(registry.validate_and_consume(&wallet2, &nonce2, 60).is_ok());
     }
