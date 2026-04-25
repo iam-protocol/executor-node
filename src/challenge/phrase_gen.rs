@@ -3,9 +3,9 @@
 //! Picks 5 random words from `word_dict::WORDS` — a curated dictionary of
 //! 1,357 neutral/positive English words (4-8 letters, 1-3 syllables, no
 //! homophones, no substring collisions). The same dictionary is vendored
-//! into `iam-validation/src/word_dict.rs` so the validator knows what the
+//! into `entros-validation/src/word_dict.rs` so the validator knows what the
 //! executor could have issued; the two files are kept in sync by the
-//! shared curation script at `iam-validation/scripts/curate-dictionary.py`.
+//! shared curation script at `entros-validation/scripts/curate-dictionary.py`.
 //!
 //! Why server-issued rather than client-issued: without server issuance,
 //! phrase content binding is trivially defeated — an attacker submits
@@ -90,10 +90,10 @@ mod tests {
 
     #[test]
     fn dictionary_has_expected_size() {
-        // Drift guard: the iam-validation and executor-node copies of
+        // Drift guard: the entros-validation and executor-node copies of
         // word_dict.rs must stay identical. If this assertion fails, one
         // was regenerated and the other wasn't. Rerun
-        // `iam-validation/scripts/curate-dictionary.py` to resync both.
+        // `entros-validation/scripts/curate-dictionary.py` to resync both.
         assert!(
             word_dict::WORDS.len() >= 900,
             "word dictionary shrunk below 900; drift likely"

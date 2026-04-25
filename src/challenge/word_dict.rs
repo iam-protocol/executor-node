@@ -1,10 +1,10 @@
 //! Curated real-word dictionary for phrase content binding (#89 v3).
 //!
-//! **Source of truth: `iam-validation/src/word_dict.rs`.** This is a
-//! verbatim vendored copy. If this file diverges from the iam-validation
+//! **Source of truth: `entros-validation/src/word_dict.rs`.** This is a
+//! verbatim vendored copy. If this file diverges from the entros-validation
 //! copy, the validation service will reject phrases that reference words
 //! it doesn't know. Regenerate both files simultaneously from the single
-//! curation script at `iam-validation/scripts/curate-dictionary.py`.
+//! curation script at `entros-validation/scripts/curate-dictionary.py`.
 //!
 //! Drift-detection lives in the tests at the bottom of this file — if they
 //! fail, the two copies are out of sync.
