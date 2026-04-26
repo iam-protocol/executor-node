@@ -11,6 +11,7 @@ use crate::auth::api_key::api_key_auth;
 use crate::auth::rate_limit::RateLimiter;
 use crate::error::AppError;
 use crate::integrator::tracker::IntegratorTracker;
+use crate::integrator::wallet_attempts::WalletAttemptTracker;
 use crate::relayer::commitment_registry::CommitmentRegistry;
 use crate::attestation::handler::attest_handler;
 use crate::attestation::sas::SasAttestor;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub rate_limiter: Arc<RateLimiter>,
     pub attest_rate_limiter: Arc<RateLimiter>,
     pub tracker: Arc<IntegratorTracker>,
+    pub wallet_attempts: Arc<WalletAttemptTracker>,
     pub commitment_registry: Arc<CommitmentRegistry>,
     pub sas_attestor: Option<Arc<SasAttestor>>,
     pub metrics: Arc<StatusMetrics>,

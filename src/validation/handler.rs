@@ -57,7 +57,36 @@ pub async fn validate_features_handler(
         AppError::InvalidRequest(format!("invalid wallet_id: {}", req.wallet_id))
     })?;
 
-    let remaining = state.tracker.check_and_deduct(&api_key)?;
+    // Per-wallet attempt cap (master-list #94). Atomic check-and-record
+    // under a single DashMap entry write lock — concurrent requests for
+    // the same wallet can never collectively bypass the cap. Slot is
+    // refunded on successful validation below; failures leave it
+    // consumed so failures accumulate against the budget.
+    //
+    // Sequenced before integrator quota so a rate-limited wallet doesn't
+    // burn the integrator's quota.
+    if let Err(retry_after_secs) = state.wallet_attempts.check_and_record_attempt(&wallet) {
+        tracing::info!(
+            wallet_id = %req.wallet_id,
+            retry_after_secs,
+            "Wallet rate limited"
+        );
+        return Err(AppError::WalletRateLimited { retry_after_secs });
+    }
+
+    // From this point on, the wallet attempt slot is consumed. Every
+    // early-return path that does NOT correspond to a real validation
+    // failure must refund the slot — otherwise legitimate users would be
+    // counted against their per-wallet budget for infrastructure issues
+    // (integrator quota exhausted, validator unreachable, etc.).
+    let remaining = match state.tracker.check_and_deduct(&api_key) {
+        Ok(r) => r,
+        Err(e) => {
+            // Integrator quota exhausted — not the wallet's fault.
+            state.wallet_attempts.refund_on_success(&wallet);
+            return Err(e);
+        }
+    };
 
     // If validation service is not configured, pass through
     let validation_url = match &state.validation_url {
@@ -65,6 +94,10 @@ pub async fn validate_features_handler(
         None => {
             tracing::debug!("Validation service not configured, skipping");
             state.metrics.increment_validations();
+            // Validation didn't actually run; refund the wallet slot so
+            // dev environments without a validator don't accidentally
+            // tick wallets toward their cap.
+            state.wallet_attempts.refund_on_success(&wallet);
             return Ok(Json(ValidateFeaturesResponse {
                 valid: true,
                 remaining_quota: Some(remaining),
@@ -110,8 +143,12 @@ pub async fn validate_features_handler(
     let response = match request.send().await {
         Ok(r) => r,
         Err(e) => {
-            // Infrastructure failure — refund quota
+            // Infrastructure failure — refund integrator quota AND the
+            // per-wallet attempt slot. The wallet did nothing wrong; if
+            // the validator was unreachable the user shouldn't pay against
+            // their per-wallet budget.
             state.tracker.refund(&api_key);
+            state.wallet_attempts.refund_on_success(&wallet);
             return Err(AppError::ValidationServiceError(e.to_string()));
         }
     };
@@ -119,10 +156,36 @@ pub async fn validate_features_handler(
     state.metrics.increment_validations();
 
     if !response.status().is_success() {
-        tracing::info!(api_key = %api_key, wallet_id = %req.wallet_id, "Feature validation rejected");
-        return Err(AppError::ValidationFailed);
+        // Parse the validator's safe reason (when present) so the SDK + UI
+        // can show a soft-fail retry hint instead of the generic "verification
+        // failed" page. Missing/unparseable reason → opaque rejection (the
+        // existing behavior for attack signals + capture bugs).
+        //
+        // Note: the per-wallet attempt slot consumed at the top of this
+        // handler stays consumed — it's a real failed attempt against the
+        // wallet's window budget.
+        #[derive(serde::Deserialize)]
+        struct ValidatorErrorBody {
+            #[serde(default)]
+            reason: Option<String>,
+        }
+        let reason = response
+            .json::<ValidatorErrorBody>()
+            .await
+            .ok()
+            .and_then(|body| body.reason);
+        tracing::info!(
+            api_key = %api_key,
+            wallet_id = %req.wallet_id,
+            reason = ?reason,
+            "Feature validation rejected"
+        );
+        return Err(AppError::ValidationFailed { reason });
     }
 
+    // Validation passed — refund the per-wallet attempt slot so a wallet
+    // with all-successful verifications never accumulates against the cap.
+    state.wallet_attempts.refund_on_success(&wallet);
     tracing::info!(api_key = %api_key, wallet_id = %req.wallet_id, "Feature validation passed");
 
     Ok(Json(ValidateFeaturesResponse {
