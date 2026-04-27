@@ -27,6 +27,17 @@ pub struct Config {
     pub validation_service_url: Option<String>,
     pub validation_api_key: Option<String>,
     pub challenge_ttl_secs: u64,
+    /// Per-wallet validation-attempt cap (master-list #94 C4). Soft cap on
+    /// the number of attempts a single wallet can make in the configured
+    /// window before being rate-limited. Successful attempts refund their
+    /// slot; only failures persist against the cap. Configurable via
+    /// `VALIDATION_WALLET_MAX_ATTEMPTS`. Default 5 — permissive enough
+    /// for legit users with borderline mics / accents to retry, tight
+    /// enough to bound per-wallet retry damage.
+    pub wallet_max_attempts: u8,
+    /// Sliding-window length for `wallet_max_attempts`. Configurable via
+    /// `VALIDATION_WALLET_WINDOW_SECS`. Default 3600 (1 hour).
+    pub wallet_window_secs: u64,
 }
 
 impl Config {
@@ -124,6 +135,18 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
 
+        // Default 5 attempts / 1h. Permissive at launch — tightenable
+        // via env var once we have real-user failure-rate data.
+        let wallet_max_attempts: u8 = std::env::var("VALIDATION_WALLET_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+
+        let wallet_window_secs: u64 = std::env::var("VALIDATION_WALLET_WINDOW_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+
         Ok(Config {
             rpc_url,
             ws_url,
@@ -140,6 +163,8 @@ impl Config {
             validation_service_url,
             validation_api_key,
             challenge_ttl_secs,
+            wallet_max_attempts,
+            wallet_window_secs,
         })
     }
 }

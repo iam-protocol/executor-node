@@ -13,6 +13,12 @@ pub enum AppError {
     #[error("Rate limited")]
     RateLimited,
 
+    /// Per-wallet validation-rejection cap exceeded (master-list #94 C4).
+    /// `retry_after_secs` echoed in the response body so the client can
+    /// surface a cooldown countdown instead of a blind retry.
+    #[error("Too many attempts for this wallet")]
+    WalletRateLimited { retry_after_secs: u64 },
+
     #[error("Insufficient quota")]
     InsufficientQuota,
 
@@ -28,8 +34,14 @@ pub enum AppError {
     #[error("Attestation failed: {0}")]
     AttestationFailed(String),
 
+    /// Validation rejected the submission. `reason` carries the safe-to-reveal
+    /// category from `entros-validation::ValidationResult::safe_reason` for
+    /// user-recoverable failures (variance_floor, entropy_bounds,
+    /// temporal_coupling_low, phrase_content_mismatch). Attack signals and
+    /// capture bugs send `None`, preserving the historical opaque-rejection
+    /// contract that prevents adversarial probing.
     #[error("Validation failed")]
-    ValidationFailed,
+    ValidationFailed { reason: Option<String> },
 
     #[error("Validation service error: {0}")]
     ValidationServiceError(String),
@@ -41,6 +53,10 @@ impl IntoResponse for AppError {
             AppError::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized".into()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "Rate limited".into()),
+            AppError::WalletRateLimited { .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many attempts. Please wait before trying again.".into(),
+            ),
             AppError::InsufficientQuota => {
                 (StatusCode::PAYMENT_REQUIRED, "Insufficient verification quota".into())
             }
@@ -52,7 +68,7 @@ impl IntoResponse for AppError {
             AppError::AttestationFailed(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
             }
-            AppError::ValidationFailed => {
+            AppError::ValidationFailed { .. } => {
                 (StatusCode::BAD_REQUEST, "Verification failed".into())
             }
             AppError::ValidationServiceError(msg) => {
@@ -60,7 +76,22 @@ impl IntoResponse for AppError {
             }
         };
 
-        let body = json!({ "error": message });
+        // ValidationFailed surfaces an optional `reason` field for the
+        // user-recoverable subset; WalletRateLimited surfaces `reason +
+        // retry_after`; everything else returns `{error}` only.
+        let body = match &self {
+            AppError::ValidationFailed { reason: Some(r) } => {
+                json!({ "error": message, "reason": r })
+            }
+            AppError::WalletRateLimited { retry_after_secs } => {
+                json!({
+                    "error": message,
+                    "reason": "rate_limited",
+                    "retry_after": retry_after_secs,
+                })
+            }
+            _ => json!({ "error": message }),
+        };
         (status, axum::Json(body)).into_response()
     }
 }

@@ -20,6 +20,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use config::Config;
 use integrator::tracker::IntegratorTracker;
+use integrator::wallet_attempts::WalletAttemptTracker;
 use listener::event_monitor::EventMonitor;
 use relayer::commitment_registry::CommitmentRegistry;
 use relayer::transaction::RelayerTransaction;
@@ -63,6 +64,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize integrator quota tracker
     let integrator_count = config.integrators.len();
     let tracker = Arc::new(IntegratorTracker::new(config.integrators));
+    let wallet_attempts = Arc::new(WalletAttemptTracker::new(
+        config.wallet_max_attempts,
+        std::time::Duration::from_secs(config.wallet_window_secs),
+    ));
+    tracing::info!(
+        max_attempts = config.wallet_max_attempts,
+        window_secs = config.wallet_window_secs,
+        "Wallet attempt tracker initialized"
+    );
     tracing::info!(
         integrators = integrator_count,
         "Integrator tracker initialized (in-memory, resets on restart)"
@@ -135,12 +145,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Spawn background eviction task for stale wallet-attempt entries.
+    // Bounds memory growth from many distinct wallets over time —
+    // entries with an expired window AND zero in-flight attempts are
+    // dropped (next attempt re-creates them from fresh state, identical
+    // to the window-reset branch in check_and_record_attempt).
+    let wallet_attempts_ref = Arc::clone(&wallet_attempts);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let evicted = wallet_attempts_ref.evict_expired();
+            if evicted > 0 {
+                tracing::debug!(evicted, "Evicted stale wallet-attempt entries");
+            }
+        }
+    });
+
     let state = AppState {
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
         rate_limiter,
         attest_rate_limiter,
         tracker,
+        wallet_attempts,
         commitment_registry,
         sas_attestor,
         metrics: Arc::new(status::status_metrics::StatusMetrics::new()),
