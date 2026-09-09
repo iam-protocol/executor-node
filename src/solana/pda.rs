@@ -5,6 +5,10 @@ const VERIFIER_PROGRAM: Pubkey = pubkey!("4F97jNoxQzT2qRbkWpW3ztC3Nz2TtKj3rnKG8E
 const ANCHOR_PROGRAM: Pubkey = pubkey!("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2");
 const REGISTRY_PROGRAM: Pubkey = pubkey!("6VBs3zr9KrfFPGd6j7aGBPQWwZa5tajVfA7HN6MMV9VW");
 
+pub fn anchor_program_id() -> Pubkey {
+    ANCHOR_PROGRAM
+}
+
 pub fn verifier_program_id() -> Pubkey {
     VERIFIER_PROGRAM
 }

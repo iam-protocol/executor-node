@@ -915,6 +915,7 @@ pub struct IntegratorConfig {
 pub struct Config {
     pub environment: Environment,
     pub rpc_url: String,
+    pub validation_identity_program: Pubkey,
     pub ws_url: String,
     pub relayer_keypair: Keypair,
     pub sas_authority_keypair: Option<Keypair>,
@@ -1045,6 +1046,14 @@ impl Config {
                 .unwrap_or_else(|_| "0.0.0.0:3001".into())
                 .parse()?
         };
+
+        let validation_identity_program = resolve_validation_identity_program(
+            std::env::var("VALIDATION_IDENTITY_PROGRAM_ID")
+                .ok()
+                .as_deref(),
+            listen_addr,
+            environment,
+        )?;
 
         let api_keys: Vec<String> = match std::env::var("API_KEYS") {
             Ok(s) => serde_json::from_str(&s)
@@ -1179,6 +1188,7 @@ impl Config {
         Ok(Config {
             environment,
             rpc_url,
+            validation_identity_program,
             ws_url,
             relayer_keypair,
             sas_authority_keypair,
@@ -1207,5 +1217,61 @@ impl Config {
             cross_wallet_cooldown_enforce,
             scoring_config,
         })
+    }
+}
+
+fn resolve_validation_identity_program(
+    value: Option<&str>,
+    listen_addr: SocketAddr,
+    environment: Environment,
+) -> Result<Pubkey, String> {
+    let program = value
+        .map(Pubkey::from_str)
+        .transpose()
+        .map_err(|_| "VALIDATION_IDENTITY_PROGRAM_ID must be a public key".to_string())?
+        .unwrap_or_else(crate::solana::pda::anchor_program_id);
+    if program == Pubkey::default() {
+        return Err("VALIDATION_IDENTITY_PROGRAM_ID cannot be the system program".into());
+    }
+    if program != crate::solana::pda::anchor_program_id() && !listen_addr.ip().is_loopback() {
+        return Err("An alternate validation identity program requires a loopback listener".into());
+    }
+    if program != crate::solana::pda::anchor_program_id() && !environment.is_prod() {
+        return Err("An alternate validation identity program requires ENVIRONMENT=prod".into());
+    }
+    Ok(program)
+}
+
+#[cfg(test)]
+mod validation_identity_tests {
+    use super::*;
+    #[test]
+    fn alternate_program_requires_loopback_and_valid_key() {
+        let public = "0.0.0.0:3001".parse().expect("address");
+        let local = "127.0.0.1:3001".parse().expect("address");
+        let alternate = Pubkey::new_unique().to_string();
+        assert_eq!(
+            resolve_validation_identity_program(None, public, Environment::Dev).expect("default"),
+            crate::solana::pda::anchor_program_id()
+        );
+        assert!(
+            resolve_validation_identity_program(Some(&alternate), public, Environment::Prod)
+                .is_err()
+        );
+        assert!(
+            resolve_validation_identity_program(Some(&alternate), local, Environment::Prod).is_ok()
+        );
+        assert!(
+            resolve_validation_identity_program(Some(&alternate), local, Environment::Dev).is_err()
+        );
+        assert!(
+            resolve_validation_identity_program(Some("bad"), local, Environment::Prod).is_err()
+        );
+        assert!(resolve_validation_identity_program(
+            Some(&Pubkey::default().to_string()),
+            local,
+            Environment::Prod
+        )
+        .is_err());
     }
 }
