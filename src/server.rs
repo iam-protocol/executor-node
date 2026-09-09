@@ -34,6 +34,7 @@ use crate::validation::handler::validate_features_handler;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub validation_identity_program: solana_sdk::pubkey::Pubkey,
     pub relayer_tx: Arc<RelayerTransaction>,
     pub api_keys: Arc<Vec<String>>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -202,7 +203,20 @@ fn make_http_request_span<B>(request: &axum::http::Request<B>) -> tracing::Span 
     )
 }
 
+async fn validation_deployment_handler(
+    State(state): State<AppState>,
+) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "schemaVersion": 1,
+        "identityProgram": state.validation_identity_program.to_string(),
+        "validationOnly": state.validation_identity_program != crate::solana::pda::anchor_program_id(),
+        "challengeRequired": state.challenge_required,
+    }))
+}
+
 pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) -> Router {
+    let validation_only =
+        state.validation_identity_program != crate::solana::pda::anchor_program_id();
     // Attest route with its own tighter rate limit (10/min)
     let attest_route = Router::new()
         .route("/attest", post(attest_handler))
@@ -232,18 +246,21 @@ pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) 
     //   key, which is the resource-exhaustion path this stack is meant to
     //   close. Auth failures are already distinguishable by their 401, so
     //   leaving them unclamped reveals nothing new.
-    let timed_routes = Router::new()
-        .route("/verify", post(verify_handler))
-        .route("/validate-features", post(validate_features_handler))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            rate_limit_middleware,
-        ))
-        .route_layer(middleware::from_fn(crate::timing::min_duration_middleware))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ));
+    let timed_routes = if validation_only {
+        Router::new()
+    } else {
+        Router::new().route("/verify", post(verify_handler))
+    }
+    .route("/validate-features", post(validate_features_handler))
+    .route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        rate_limit_middleware,
+    ))
+    .route_layer(middleware::from_fn(crate::timing::min_duration_middleware))
+    .route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth_middleware,
+    ));
 
     // Untimed authenticated routes: /challenge issues nonces (fast by design,
     // user-blocking before the verify call) and /attest already exposes its
@@ -254,18 +271,27 @@ pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) 
     // pre-handler short-circuits also clamp to the timing budget. Each
     // Router carries its own layer stack but the same `state.rate_limiter`
     // (Arc) backs both, so counters merge across the route groups.
-    let study_routes = Router::new()
-        .route("/study/definition", post(study_definition_handler))
-        .route("/study/enrol", post(study_enrol_handler))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ))
-        .route_layer(RequestBodyLimitLayer::new(STUDY_REQUEST_BODY_BYTES));
+    let study_routes = if validation_only {
+        Router::new()
+    } else {
+        Router::new()
+            .route("/study/definition", post(study_definition_handler))
+            .route("/study/enrol", post(study_enrol_handler))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ))
+            .route_layer(RequestBodyLimitLayer::new(STUDY_REQUEST_BODY_BYTES))
+    };
 
     let untimed_routes = Router::new()
         .route("/challenge", get(challenge_handler))
-        .merge(attest_route)
+        .route("/validation-deployment", get(validation_deployment_handler))
+        .merge(if validation_only {
+            Router::new()
+        } else {
+            attest_route
+        })
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -355,6 +381,7 @@ pub fn build_test_state(
         Keypair::new(),
     ));
     AppState {
+        validation_identity_program: crate::solana::pda::anchor_program_id(),
         relayer_tx: Arc::new(RelayerTransaction::new(solana_client)),
         api_keys: Arc::new(vec![]),
         rate_limiter: Arc::new(RateLimiter::new(60)),
@@ -1037,5 +1064,66 @@ mod per_ip_middleware_tests {
             assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
         }
         assert_eq!(metrics.per_ip_rate_limit_rejected(), 2);
+    }
+}
+
+#[cfg(test)]
+mod validation_deployment_tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn isolated_gateway_metadata_requires_authentication_and_disables_writes() {
+        let mut state = build_test_state(tracker_with_quota("fixture", 10), None);
+        state.api_keys = Arc::new(vec!["fixture".into()]);
+        state.validation_identity_program = solana_sdk::pubkey::Pubkey::new_unique();
+        state.challenge_required = true;
+        let expected_program = state.validation_identity_program.to_string();
+        let router = create_router(state, &[]);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/validation-deployment")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/validation-deployment")
+                    .header("x-api-key", "fixture")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["identityProgram"], expected_program);
+        assert_eq!(body["validationOnly"], true);
+        assert_eq!(body["challengeRequired"], true);
+        for path in ["/verify", "/attest", "/study/definition", "/study/enrol"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("x-api-key", "fixture")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 }

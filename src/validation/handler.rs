@@ -732,7 +732,10 @@ pub async fn validate_features_handler(
     }
 
     // Fetch user's verification timestamps from on-chain IdentityState
-    let (identity_pda, _) = crate::solana::pda::find_identity_state_pda(&wallet);
+    let (identity_pda, _) = Pubkey::find_program_address(
+        &[b"identity", wallet.as_ref()],
+        &state.validation_identity_program,
+    );
     if req
         .study
         .as_ref()
@@ -745,7 +748,7 @@ pub async fn validate_features_handler(
     let identity_result = state
         .relayer_tx
         .client()
-        .get_account_data(&identity_pda)
+        .get_owned_account_data(&identity_pda, &state.validation_identity_program)
         .await;
     let identity_data = identity_result?;
     let projection_intent = derive_projection_intent(
@@ -2150,6 +2153,102 @@ mod validator_reached_tests {
     }
 
     // ---- reachability, and the gate whose contract was previously inverted ----
+
+    #[tokio::test]
+    async fn official_identity_selects_update_even_when_isolated_identity_is_absent() {
+        let mock = MockValidator::spawn(StatusCode::OK, success_body(0.0, 0.0, 0.0)).await;
+        let state = state_with_mock_validator(tracker_with_quota("test-key", 10), &mock);
+        let wallet = Pubkey::new_unique();
+        let program =
+            Pubkey::from_str("GZYwTp2ozeuRA5Gof9vs4ya961aANcJBdUzB7LN6q4b2").expect("program");
+        let (address, _) = crate::solana::pda::find_identity_state_pda(&wallet);
+        let mut data = vec![0; 593];
+        data[..8].copy_from_slice(&IDENTITY_DISCRIMINATOR);
+        data[IDENTITY_PROJECTION_VERSION_OFFSET..IDENTITY_PROJECTION_VERSION_OFFSET + 2]
+            .copy_from_slice(&1u16.to_le_bytes());
+        mock.set_account(&address, &program, &data, false);
+        let mut request = baseline_request(wallet.to_string());
+        request.projection_version = Some(1);
+        validate_features_handler(
+            State(state),
+            None,
+            headers_with_key("test-key"),
+            Json(request),
+        )
+        .await
+        .expect("validation");
+        assert_eq!(mock.received()[0]["request_receipt"], false);
+        assert!(mock.received()[0]["receipt_purpose"].is_null());
+    }
+
+    #[tokio::test]
+    async fn isolated_identity_selects_mint_then_update_without_client_receipt_override() {
+        let mock = MockValidator::spawn(StatusCode::OK, success_body(0.0, 0.0, 0.0)).await;
+        let mut state = state_with_mock_validator(tracker_with_quota("test-key", 10), &mock);
+        let wallet = Pubkey::new_unique();
+        let official = crate::solana::pda::anchor_program_id();
+        let alternate = Pubkey::new_unique();
+        state.validation_identity_program = alternate;
+        let (official_address, _) = crate::solana::pda::find_identity_state_pda(&wallet);
+        let (isolated_address, _) =
+            Pubkey::find_program_address(&[b"identity", wallet.as_ref()], &alternate);
+        let mut data = vec![0; 593];
+        data[..8].copy_from_slice(&IDENTITY_DISCRIMINATOR);
+        data[IDENTITY_PROJECTION_VERSION_OFFSET..IDENTITY_PROJECTION_VERSION_OFFSET + 2]
+            .copy_from_slice(&1u16.to_le_bytes());
+        mock.set_account(&official_address, &official, &data, false);
+        for (index, expected_mint) in [true, false].into_iter().enumerate() {
+            let mut request = baseline_request(wallet.to_string());
+            request.projection_version = Some(1);
+            request._request_receipt = Some(!expected_mint);
+            validate_features_handler(
+                State(state.clone()),
+                None,
+                headers_with_key("test-key"),
+                Json(request),
+            )
+            .await
+            .expect("validation");
+            assert_eq!(mock.received()[index]["request_receipt"], expected_mint);
+            assert_eq!(
+                mock.received()[index]["receipt_purpose"],
+                if expected_mint {
+                    serde_json::json!("mint")
+                } else {
+                    serde_json::Value::Null
+                }
+            );
+            mock.set_account(&isolated_address, &alternate, &data, false);
+        }
+    }
+
+    #[tokio::test]
+    async fn identity_owner_and_executable_mismatch_stop_before_validator() {
+        for executable in [false, true] {
+            let mock = MockValidator::spawn(StatusCode::OK, success_body(0.0, 0.0, 0.0)).await;
+            let mut state = state_with_mock_validator(tracker_with_quota("test-key", 10), &mock);
+            let wallet = Pubkey::new_unique();
+            let alternate = Pubkey::new_unique();
+            state.validation_identity_program = alternate;
+            let (address, _) =
+                Pubkey::find_program_address(&[b"identity", wallet.as_ref()], &alternate);
+            let owner = if executable {
+                alternate
+            } else {
+                crate::solana::pda::anchor_program_id()
+            };
+            mock.set_account(&address, &owner, &[0; 593], executable);
+            let result = validate_features_handler(
+                State(state),
+                None,
+                headers_with_key("test-key"),
+                Json(baseline_request(wallet.to_string())),
+            )
+            .await;
+            assert!(matches!(result, Err(AppError::SolanaRpcUnavailable)));
+            assert_eq!(mock.request_count(), 0);
+        }
+    }
 
     #[tokio::test]
     async fn a_clean_request_reaches_the_upstream_validator() {

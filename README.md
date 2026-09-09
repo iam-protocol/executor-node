@@ -118,3 +118,12 @@ npm run test:sign-scoring
 ## License
 
 MIT.
+
+### Local validation deployment selection
+
+`VALIDATION_IDENTITY_PROGRAM_ID` selects the program used to read validation identity state. The default is the official Anchor program.
+An alternate program requires a loopback listener, Solana devnet, and `ENVIRONMENT=prod`. Signed scoring and validator URL checks still apply.
+The gateway derives receipt intent from the selected on-chain identity. Client receipt flags do not override that decision.
+
+Authenticated `GET /validation-deployment` returns the identity program, validation-only mode, and challenge requirement.
+Alternate mode excludes `/verify`, `/attest`, and study routes. Wallet clients submit their own protocol transactions.
