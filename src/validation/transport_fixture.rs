@@ -167,7 +167,7 @@ fn decode_binary_transport(body: &[u8]) -> Result<DecodedBinaryTransport, Binary
     }
     let metadata_len = u32::from_le_bytes([body[8], body[9], body[10], body[11]]) as usize;
     let pcm_len = u32::from_le_bytes([body[12], body[13], body[14], body[15]]) as usize;
-    if pcm_len == 0 || pcm_len % 2 != 0 {
+    if pcm_len == 0 || !pcm_len.is_multiple_of(2) {
         return Err(BinaryEnvelopeError::InvalidPcmLength);
     }
     let metadata_end = BINARY_HEADER_LEN

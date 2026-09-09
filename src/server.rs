@@ -1127,3 +1127,149 @@ mod validation_deployment_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod load_pressure {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    async fn spawn_server() -> String {
+        let tracker = tracker_with_quota("load-key", u64::MAX);
+        let state = build_test_state(tracker, None);
+        let app = create_router(state, &[]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    async fn drive(client: reqwest::Client, url: String, workers: usize, per_worker: usize) {
+        let ok = Arc::new(AtomicU64::new(0));
+        let bad = Arc::new(AtomicU64::new(0));
+        let latencies = Arc::new(tokio::sync::Mutex::new(Vec::<u128>::new()));
+        let start = Instant::now();
+
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let (client, url) = (client.clone(), url.clone());
+            let (ok, bad, latencies) = (Arc::clone(&ok), Arc::clone(&bad), Arc::clone(&latencies));
+            handles.push(tokio::spawn(async move {
+                let mut local = Vec::with_capacity(per_worker);
+                for _ in 0..per_worker {
+                    let t = Instant::now();
+                    match client.get(&url).send().await {
+                        Ok(r) if r.status().is_success() => {
+                            let _ = r.bytes().await;
+                            ok.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {
+                            bad.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    local.push(t.elapsed().as_micros());
+                }
+                latencies.lock().await.extend(local);
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        let mut lat = latencies.lock().await.clone();
+        lat.sort_unstable();
+        let pct = |p: f64| lat[((lat.len() as f64 * p) as usize).min(lat.len() - 1)];
+        let (ok, bad) = (ok.load(Ordering::Relaxed), bad.load(Ordering::Relaxed));
+        let path = url.rsplit('/').next().unwrap().to_string();
+        println!(
+            "  {path:<22} n={:<6} ok={:<6} err={:<4} {:>8.0} req/s  p50={:>6}us p95={:>7}us p99={:>7}us",
+            ok + bad, ok, bad, (ok + bad) as f64 / elapsed.as_secs_f64(),
+            pct(0.50), pct(0.95), pct(0.99),
+        );
+        assert_eq!(bad, 0, "{path} dropped requests under load");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "load measurement; run with --ignored --nocapture"]
+    async fn both_protocols_stay_error_free_under_concurrency() {
+        // The `h2` advisory this release closes is a stream-handling denial of
+        // service, so the HTTP/2 pass drives multiplexed streams rather than
+        // separate connections.
+        let base = spawn_server().await;
+
+        println!("HTTP/1.1, 128 connections");
+        let http1 = reqwest::Client::builder()
+            .pool_max_idle_per_host(256)
+            .build()
+            .unwrap();
+        for path in ["/health", "/status", "/metrics"] {
+            drive(http1.clone(), format!("{base}{path}"), 128, 100).await;
+        }
+
+        println!("HTTP/2 prior knowledge, 256 concurrent streams");
+        let http2 = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        for path in ["/health", "/status"] {
+            drive(http2.clone(), format!("{base}{path}"), 256, 50).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "load measurement; run with --ignored --nocapture"]
+    async fn oversized_bodies_never_reach_a_handler() {
+        // The size limit answers from `Content-Length` before reading the body,
+        // so a client can lose the connection mid-upload instead of reading the
+        // 413. Both outcomes prove the body never buffered. A 2xx would not.
+        let base = spawn_server().await;
+        let client = reqwest::Client::new();
+        let oversized = vec![0u8; MAX_REQUEST_BODY_BYTES + 4096];
+        let offered = 640u64 * oversized.len() as u64 / (1024 * 1024);
+
+        let start = Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..64 {
+            let client = client.clone();
+            let url = format!("{base}/validate-features");
+            let body = oversized.clone();
+            handles.push(tokio::spawn(async move {
+                let (mut refused, mut accepted) = (0u32, 0u32);
+                for _ in 0..10 {
+                    match client.post(&url).body(body.clone()).send().await {
+                        Ok(r) if r.status().is_success() => accepted += 1,
+                        _ => refused += 1,
+                    }
+                }
+                (refused, accepted)
+            }));
+        }
+        let (mut refused, mut accepted) = (0u32, 0u32);
+        for h in handles {
+            let (r, a) = h.await.unwrap();
+            refused += r;
+            accepted += a;
+        }
+        println!(
+            "  oversized-body         n=640   refused={refused:<4} accepted={accepted:<4} {:>8.0} req/s  ({offered} MiB offered)",
+            640.0 / start.elapsed().as_secs_f64(),
+        );
+        assert_eq!(accepted, 0, "an oversized body reached a handler");
+
+        // The server must still serve normally after the burst.
+        let health = client.get(format!("{base}/health")).send().await.unwrap();
+        assert!(
+            health.status().is_success(),
+            "server degraded after the burst"
+        );
+        println!("  post-burst /health     {}", health.status());
+    }
+}

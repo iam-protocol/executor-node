@@ -1,14 +1,14 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use solana_attestation_service_client::instructions::{
-    CloseAttestationBuilder, CreateAttestationBuilder,
-};
-use solana_attestation_service_client::programs::SOLANA_ATTESTATION_SERVICE_ID;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
+use crate::attestation::instructions::{
+    build_close_attestation, build_create_attestation, CloseAttestationAccounts,
+    CreateAttestationAccounts, ATTESTATION_PROGRAM_ID,
+};
 use crate::error::AppError;
 use crate::solana::client::SolanaClient;
 use crate::solana::pda;
@@ -139,15 +139,13 @@ impl SasAttestor {
         if existing.is_some() {
             // Close existing attestation before recreating
             let event_authority_pda = find_event_authority_pda();
-            let close_ix = CloseAttestationBuilder::new()
-                .payer(self.client.relayer_pubkey())
-                .authority(self.authority_keypair.pubkey())
-                .credential(self.credential_pda)
-                .attestation(attestation_pda)
-                .event_authority(event_authority_pda)
-                .attestation_program(SOLANA_ATTESTATION_SERVICE_ID)
-                .instruction();
-            instructions.push(close_ix);
+            instructions.push(build_close_attestation(&CloseAttestationAccounts {
+                payer: self.client.relayer_pubkey(),
+                authority: self.authority_keypair.pubkey(),
+                credential: self.credential_pda,
+                attestation: attestation_pda,
+                event_authority: event_authority_pda,
+            }));
         }
 
         // 6. Serialize attestation data using the `now` captured at step 2.
@@ -156,17 +154,19 @@ impl SasAttestor {
         // 7. Build CreateAttestation instruction
         let expiry = now + (self.ttl_days as i64 * 86_400);
 
-        let create_ix = CreateAttestationBuilder::new()
-            .payer(self.client.relayer_pubkey())
-            .authority(self.authority_keypair.pubkey())
-            .credential(self.credential_pda)
-            .schema(self.schema_pda)
-            .attestation(attestation_pda)
-            .nonce(*user_wallet)
-            .data(data)
-            .expiry(expiry)
-            .instruction();
-        instructions.push(create_ix);
+        let accounts = CreateAttestationAccounts {
+            payer: self.client.relayer_pubkey(),
+            authority: self.authority_keypair.pubkey(),
+            credential: self.credential_pda,
+            schema: self.schema_pda,
+            attestation: attestation_pda,
+        };
+        instructions.push(build_create_attestation(
+            &accounts,
+            user_wallet,
+            &data,
+            expiry,
+        ));
 
         // 8. Submit transaction (relayer pays, authority signs)
         let sig = self
@@ -187,7 +187,7 @@ fn find_sas_attestation_pda(credential: &Pubkey, schema: &Pubkey, nonce: &Pubkey
             schema.as_ref(),
             nonce.as_ref(),
         ],
-        &SOLANA_ATTESTATION_SERVICE_ID,
+        &ATTESTATION_PROGRAM_ID,
     );
     pda
 }
@@ -195,8 +195,7 @@ fn find_sas_attestation_pda(credential: &Pubkey, schema: &Pubkey, nonce: &Pubkey
 /// Derive the event authority PDA (singleton).
 /// Seeds: ["__event_authority"]
 fn find_event_authority_pda() -> Pubkey {
-    let (pda, _) =
-        Pubkey::find_program_address(&[b"__event_authority"], &SOLANA_ATTESTATION_SERVICE_ID);
+    let (pda, _) = Pubkey::find_program_address(&[b"__event_authority"], &ATTESTATION_PROGRAM_ID);
     pda
 }
 
