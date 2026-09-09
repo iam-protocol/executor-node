@@ -57,6 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut relayer_keypair_bytes = config.relayer_keypair.to_bytes();
     let solana_client = Arc::new(SolanaClient::new(&config.rpc_url, config.relayer_keypair));
 
+    if config.validation_identity_program != crate::solana::pda::anchor_program_id() {
+        solana_client.require_devnet().await?;
+    }
     let balance = solana_client.get_balance().await?;
     tracing::info!(
         balance_sol = balance as f64 / 1_000_000_000.0,
@@ -407,6 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let state = AppState {
+        validation_identity_program: config.validation_identity_program,
         relayer_tx,
         api_keys: Arc::new(config.api_keys),
         rate_limiter,
@@ -423,7 +427,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         validation_url: config.validation_service_url,
         validation_api_key: config.validation_api_key,
         challenge_registry,
-        challenge_required: config.environment.is_prod(),
+        challenge_required: config.environment.is_prod()
+            || config.validation_identity_program != crate::solana::pda::anchor_program_id(),
         scoring_config: Arc::new(config.scoring_config.config),
         automation_observe: config.automation_observe,
         automation_webdriver_reject: config.automation_webdriver_reject,

@@ -3,7 +3,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use super::pda;
 
-const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
+pub const SYSTEM_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("11111111111111111111111111111111");
 
 // Anchor discriminators (from IDL)
 const CREATE_CHALLENGE_DISC: [u8; 8] = [170, 244, 47, 1, 1, 15, 173, 239];

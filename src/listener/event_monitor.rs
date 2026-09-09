@@ -2,7 +2,7 @@ use futures_util::StreamExt;
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use solana_client::rpc_config::RpcTransactionLogsConfig;
 use solana_client::rpc_config::RpcTransactionLogsFilter;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use std::time::Duration;
 

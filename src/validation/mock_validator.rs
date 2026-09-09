@@ -23,6 +23,7 @@ pub struct MockValidator {
     addr: SocketAddr,
     received: Arc<Mutex<Vec<Value>>>,
     server: Option<tokio::task::JoinHandle<()>>,
+    accounts: Arc<Mutex<std::collections::HashMap<String, Value>>>,
 }
 
 impl Drop for MockValidator {
@@ -38,6 +39,7 @@ struct MockState {
     status: StatusCode,
     body: MockBody,
     received: Arc<Mutex<Vec<Value>>>,
+    accounts: Arc<Mutex<std::collections::HashMap<String, Value>>>,
 }
 
 #[derive(Clone)]
@@ -60,7 +62,9 @@ impl MockValidator {
 
     async fn spawn_with_body(status: StatusCode, body: MockBody) -> Self {
         let received = Arc::new(Mutex::new(Vec::new()));
+        let accounts = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let state = MockState {
+            accounts: accounts.clone(),
             status,
             body,
             received: received.clone(),
@@ -88,6 +92,7 @@ impl MockValidator {
             addr,
             received,
             server: Some(server),
+            accounts,
         }
     }
 
@@ -96,6 +101,17 @@ impl MockValidator {
     /// Deliberately without a trailing slash: the handler builds its target as
     /// `format!("{validation_url}/validate")`, so a trailing slash would
     /// produce `//validate` and miss the route.
+    pub fn set_account(
+        &self,
+        address: &solana_sdk::pubkey::Pubkey,
+        owner: &solana_sdk::pubkey::Pubkey,
+        data: &[u8],
+        executable: bool,
+    ) {
+        use base64::Engine;
+        self.accounts.lock().expect("mock accounts lock").insert(address.to_string(), serde_json::json!({"lamports":1,"owner":owner.to_string(),"executable":executable,"rentEpoch":0,"data":[base64::engine::general_purpose::STANDARD.encode(data),"base64"]}));
+    }
+
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
     }
@@ -144,9 +160,22 @@ async fn handle(State(state): State<MockState>, Json(body): Json<Value>) -> Resp
     }
 }
 
-async fn handle_rpc(Json(body): Json<Value>) -> Json<Value> {
+async fn handle_rpc(State(state): State<MockState>, Json(body): Json<Value>) -> Json<Value> {
     let value = if body.get("method").and_then(Value::as_str) == Some("getMultipleAccounts") {
-        serde_json::json!([null])
+        let accounts = state.accounts.lock().expect("mock accounts lock");
+        Value::Array(
+            body["params"][0]
+                .as_array()
+                .expect("RPC addresses")
+                .iter()
+                .map(|address| {
+                    accounts
+                        .get(address.as_str().expect("address string"))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        )
     } else {
         Value::Null
     };

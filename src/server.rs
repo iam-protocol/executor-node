@@ -34,6 +34,7 @@ use crate::validation::handler::validate_features_handler;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub validation_identity_program: solana_sdk::pubkey::Pubkey,
     pub relayer_tx: Arc<RelayerTransaction>,
     pub api_keys: Arc<Vec<String>>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -202,7 +203,20 @@ fn make_http_request_span<B>(request: &axum::http::Request<B>) -> tracing::Span 
     )
 }
 
+async fn validation_deployment_handler(
+    State(state): State<AppState>,
+) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "schemaVersion": 1,
+        "identityProgram": state.validation_identity_program.to_string(),
+        "validationOnly": state.validation_identity_program != crate::solana::pda::anchor_program_id(),
+        "challengeRequired": state.challenge_required,
+    }))
+}
+
 pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) -> Router {
+    let validation_only =
+        state.validation_identity_program != crate::solana::pda::anchor_program_id();
     // Attest route with its own tighter rate limit (10/min)
     let attest_route = Router::new()
         .route("/attest", post(attest_handler))
@@ -232,18 +246,21 @@ pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) 
     //   key, which is the resource-exhaustion path this stack is meant to
     //   close. Auth failures are already distinguishable by their 401, so
     //   leaving them unclamped reveals nothing new.
-    let timed_routes = Router::new()
-        .route("/verify", post(verify_handler))
-        .route("/validate-features", post(validate_features_handler))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            rate_limit_middleware,
-        ))
-        .route_layer(middleware::from_fn(crate::timing::min_duration_middleware))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ));
+    let timed_routes = if validation_only {
+        Router::new()
+    } else {
+        Router::new().route("/verify", post(verify_handler))
+    }
+    .route("/validate-features", post(validate_features_handler))
+    .route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        rate_limit_middleware,
+    ))
+    .route_layer(middleware::from_fn(crate::timing::min_duration_middleware))
+    .route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth_middleware,
+    ));
 
     // Untimed authenticated routes: /challenge issues nonces (fast by design,
     // user-blocking before the verify call) and /attest already exposes its
@@ -254,18 +271,27 @@ pub fn create_router(state: AppState, cors_origins: &[axum::http::HeaderValue]) 
     // pre-handler short-circuits also clamp to the timing budget. Each
     // Router carries its own layer stack but the same `state.rate_limiter`
     // (Arc) backs both, so counters merge across the route groups.
-    let study_routes = Router::new()
-        .route("/study/definition", post(study_definition_handler))
-        .route("/study/enrol", post(study_enrol_handler))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ))
-        .route_layer(RequestBodyLimitLayer::new(STUDY_REQUEST_BODY_BYTES));
+    let study_routes = if validation_only {
+        Router::new()
+    } else {
+        Router::new()
+            .route("/study/definition", post(study_definition_handler))
+            .route("/study/enrol", post(study_enrol_handler))
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ))
+            .route_layer(RequestBodyLimitLayer::new(STUDY_REQUEST_BODY_BYTES))
+    };
 
     let untimed_routes = Router::new()
         .route("/challenge", get(challenge_handler))
-        .merge(attest_route)
+        .route("/validation-deployment", get(validation_deployment_handler))
+        .merge(if validation_only {
+            Router::new()
+        } else {
+            attest_route
+        })
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -355,6 +381,7 @@ pub fn build_test_state(
         Keypair::new(),
     ));
     AppState {
+        validation_identity_program: crate::solana::pda::anchor_program_id(),
         relayer_tx: Arc::new(RelayerTransaction::new(solana_client)),
         api_keys: Arc::new(vec![]),
         rate_limiter: Arc::new(RateLimiter::new(60)),
@@ -406,6 +433,87 @@ pub fn headers_with_key(api_key: &str) -> axum::http::HeaderMap {
 
 #[cfg(test)]
 pub(crate) static LOG_CAPTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+mod proof_generation_pressure_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use futures_util::stream::{self, StreamExt};
+    use std::net::SocketAddr;
+    use tower::util::ServiceExt;
+
+    #[tokio::test(start_paused = true)]
+    async fn unsupported_proof_bursts_preserve_quota_and_commitments() {
+        const REQUESTS: usize = 128;
+        for concurrency in [1, 16, 64] {
+            let tracker = tracker_with_quota("pressure-test", 10);
+            let mut state = build_test_state(tracker.clone(), None);
+            state.api_keys = Arc::new(vec!["pressure-test".to_owned()]);
+            state.rate_limiter = Arc::new(RateLimiter::new(10_000));
+            state.per_ip_rate_limiter = Arc::new(PerIpRateLimiter::new(10_000));
+            let registry = state.commitment_registry.clone();
+            let metrics = state.metrics.clone();
+            let router = create_router(state, &[]);
+            let started = std::time::Instant::now();
+            let statuses: Vec<StatusCode> = stream::iter(0..REQUESTS)
+                .map(|index| {
+                    let router = router.clone();
+                    async move {
+                        let generation = match index % 3 {
+                            0 => Some("request-bound-v1"),
+                            1 => Some("unknown"),
+                            _ => None,
+                        };
+                        let body = serde_json::to_vec(&serde_json::json!({
+                            "proof_generation": generation,
+                            "proof_bytes": vec![0u8; 256],
+                            "public_inputs": vec![vec![0u8; 32]; if generation.is_none() { 6 } else { 4 }],
+                            "commitment": vec![7u8; 32],
+                            "is_first_verification": true,
+                        }))
+                        .expect("synthetic request encodes");
+                        let peer: SocketAddr = "127.0.0.1:12345".parse().expect("test peer");
+                        router
+                            .oneshot(
+                                Request::post("/verify")
+                                    .header(header::CONTENT_TYPE, "application/json")
+                                    .header(header::CONTENT_LENGTH, body.len())
+                                    .header("x-api-key", "pressure-test")
+                                    .extension(ConnectInfo(peer))
+                                    .body(Body::from(body))
+                                    .expect("request builds"),
+                            )
+                            .await
+                            .expect("router responds")
+                            .status()
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect()
+                .await;
+            assert_eq!(statuses.len(), REQUESTS);
+            assert!(statuses
+                .iter()
+                .all(|status| *status == StatusCode::BAD_REQUEST));
+            assert_eq!(tracker.get_remaining("pressure-test"), 10);
+            assert!(!registry.check_and_record("pressure-test", [7u8; 32]));
+            assert_eq!(metrics.verifications_relayed(), 0);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scope": "in-process router with virtual timing delays",
+                    "requests": REQUESTS,
+                    "concurrency": concurrency,
+                    "rejected": statuses.len(),
+                    "quota_unchanged": true,
+                    "commitment_unchanged": true,
+                    "wall_ms": started.elapsed().as_secs_f64() * 1_000.0,
+                })
+            );
+        }
+    }
+}
 
 #[cfg(test)]
 mod request_trace_tests {
@@ -956,5 +1064,212 @@ mod per_ip_middleware_tests {
             assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
         }
         assert_eq!(metrics.per_ip_rate_limit_rejected(), 2);
+    }
+}
+
+#[cfg(test)]
+mod validation_deployment_tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn isolated_gateway_metadata_requires_authentication_and_disables_writes() {
+        let mut state = build_test_state(tracker_with_quota("fixture", 10), None);
+        state.api_keys = Arc::new(vec!["fixture".into()]);
+        state.validation_identity_program = solana_sdk::pubkey::Pubkey::new_unique();
+        state.challenge_required = true;
+        let expected_program = state.validation_identity_program.to_string();
+        let router = create_router(state, &[]);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/validation-deployment")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/validation-deployment")
+                    .header("x-api-key", "fixture")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["identityProgram"], expected_program);
+        assert_eq!(body["validationOnly"], true);
+        assert_eq!(body["challengeRequired"], true);
+        for path in ["/verify", "/attest", "/study/definition", "/study/enrol"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("x-api-key", "fixture")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod load_pressure {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    async fn spawn_server() -> String {
+        let tracker = tracker_with_quota("load-key", u64::MAX);
+        let state = build_test_state(tracker, None);
+        let app = create_router(state, &[]);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    async fn drive(client: reqwest::Client, url: String, workers: usize, per_worker: usize) {
+        let ok = Arc::new(AtomicU64::new(0));
+        let bad = Arc::new(AtomicU64::new(0));
+        let latencies = Arc::new(tokio::sync::Mutex::new(Vec::<u128>::new()));
+        let start = Instant::now();
+
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let (client, url) = (client.clone(), url.clone());
+            let (ok, bad, latencies) = (Arc::clone(&ok), Arc::clone(&bad), Arc::clone(&latencies));
+            handles.push(tokio::spawn(async move {
+                let mut local = Vec::with_capacity(per_worker);
+                for _ in 0..per_worker {
+                    let t = Instant::now();
+                    match client.get(&url).send().await {
+                        Ok(r) if r.status().is_success() => {
+                            let _ = r.bytes().await;
+                            ok.fetch_add(1, Ordering::Relaxed);
+                        }
+                        _ => {
+                            bad.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    local.push(t.elapsed().as_micros());
+                }
+                latencies.lock().await.extend(local);
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        let mut lat = latencies.lock().await.clone();
+        lat.sort_unstable();
+        let pct = |p: f64| lat[((lat.len() as f64 * p) as usize).min(lat.len() - 1)];
+        let (ok, bad) = (ok.load(Ordering::Relaxed), bad.load(Ordering::Relaxed));
+        let path = url.rsplit('/').next().unwrap().to_string();
+        println!(
+            "  {path:<22} n={:<6} ok={:<6} err={:<4} {:>8.0} req/s  p50={:>6}us p95={:>7}us p99={:>7}us",
+            ok + bad, ok, bad, (ok + bad) as f64 / elapsed.as_secs_f64(),
+            pct(0.50), pct(0.95), pct(0.99),
+        );
+        assert_eq!(bad, 0, "{path} dropped requests under load");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "load measurement; run with --ignored --nocapture"]
+    async fn both_protocols_stay_error_free_under_concurrency() {
+        // The `h2` advisory this release closes is a stream-handling denial of
+        // service, so the HTTP/2 pass drives multiplexed streams rather than
+        // separate connections.
+        let base = spawn_server().await;
+
+        println!("HTTP/1.1, 128 connections");
+        let http1 = reqwest::Client::builder()
+            .pool_max_idle_per_host(256)
+            .build()
+            .unwrap();
+        for path in ["/health", "/status", "/metrics"] {
+            drive(http1.clone(), format!("{base}{path}"), 128, 100).await;
+        }
+
+        println!("HTTP/2 prior knowledge, 256 concurrent streams");
+        let http2 = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        for path in ["/health", "/status"] {
+            drive(http2.clone(), format!("{base}{path}"), 256, 50).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "load measurement; run with --ignored --nocapture"]
+    async fn oversized_bodies_never_reach_a_handler() {
+        // The size limit answers from `Content-Length` before reading the body,
+        // so a client can lose the connection mid-upload instead of reading the
+        // 413. Both outcomes prove the body never buffered. A 2xx would not.
+        let base = spawn_server().await;
+        let client = reqwest::Client::new();
+        let oversized = vec![0u8; MAX_REQUEST_BODY_BYTES + 4096];
+        let offered = 640u64 * oversized.len() as u64 / (1024 * 1024);
+
+        let start = Instant::now();
+        let mut handles = Vec::new();
+        for _ in 0..64 {
+            let client = client.clone();
+            let url = format!("{base}/validate-features");
+            let body = oversized.clone();
+            handles.push(tokio::spawn(async move {
+                let (mut refused, mut accepted) = (0u32, 0u32);
+                for _ in 0..10 {
+                    match client.post(&url).body(body.clone()).send().await {
+                        Ok(r) if r.status().is_success() => accepted += 1,
+                        _ => refused += 1,
+                    }
+                }
+                (refused, accepted)
+            }));
+        }
+        let (mut refused, mut accepted) = (0u32, 0u32);
+        for h in handles {
+            let (r, a) = h.await.unwrap();
+            refused += r;
+            accepted += a;
+        }
+        println!(
+            "  oversized-body         n=640   refused={refused:<4} accepted={accepted:<4} {:>8.0} req/s  ({offered} MiB offered)",
+            640.0 / start.elapsed().as_secs_f64(),
+        );
+        assert_eq!(accepted, 0, "an oversized body reached a handler");
+
+        // The server must still serve normally after the burst.
+        let health = client.get(format!("{base}/health")).send().await.unwrap();
+        assert!(
+            health.status().is_success(),
+            "server degraded after the burst"
+        );
+        println!("  post-burst /health     {}", health.status());
     }
 }

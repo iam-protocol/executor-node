@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
-use solana_sdk::commitment_config::CommitmentConfig;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_commitment_config::CommitmentConfig;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature, Signer};
 use solana_sdk::transaction::Transaction;
-use solana_transaction_status::UiTransactionEncoding;
+use solana_transaction_status_client_types::UiTransactionEncoding;
 
 use crate::error::AppError;
 
@@ -76,6 +76,34 @@ impl SolanaClient {
                 AppError::SolanaRpcUnavailable
             })?;
         Ok(accounts.pop().flatten().map(|account| account.data))
+    }
+
+    pub async fn require_devnet(&self) -> Result<(), AppError> {
+        let genesis = self
+            .rpc
+            .get_genesis_hash()
+            .await
+            .map_err(|_| AppError::SolanaRpcUnavailable)?;
+        validate_devnet_genesis(&genesis.to_string())
+    }
+
+    pub async fn get_owned_account_data(
+        &self,
+        pubkey: &Pubkey,
+        owner: &Pubkey,
+    ) -> Result<Option<Vec<u8>>, AppError> {
+        let mut accounts = self
+            .rpc
+            .get_multiple_accounts(&[*pubkey])
+            .await
+            .map_err(|_| AppError::SolanaRpcUnavailable)?;
+        match accounts.pop().flatten() {
+            Some(account) if account.owner != *owner || account.executable => {
+                Err(AppError::SolanaRpcUnavailable)
+            }
+            Some(account) => Ok(Some(account.data)),
+            None => Ok(None),
+        }
     }
 
     /// Native SOL balance (lamports) of an arbitrary wallet. Used by the
@@ -334,5 +362,25 @@ impl SolanaClient {
         }
 
         Ok(None)
+    }
+}
+
+fn validate_devnet_genesis(genesis: &str) -> Result<(), AppError> {
+    if genesis != "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG" {
+        return Err(AppError::InvalidRequest(
+            "Alternate validation identity programs require Solana devnet".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod genesis_tests {
+    use super::*;
+    #[test]
+    fn rejects_non_devnet_clusters() {
+        assert!(validate_devnet_genesis("EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG").is_ok());
+        assert!(validate_devnet_genesis("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp").is_err());
+        assert!(validate_devnet_genesis("testnet").is_err());
     }
 }
