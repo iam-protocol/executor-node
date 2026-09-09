@@ -20,7 +20,7 @@ impl RelayerTransaction {
     }
 
     /// Shared Solana client handle. Cloned (cheap Arc bump) by the observe-only
-    /// wallet-reputation read (#196, D1) so the read can run in a detached task
+    /// wallet-reputation read so it can run in a detached task
     /// without borrowing the request path.
     pub fn client(&self) -> Arc<SolanaClient> {
         Arc::clone(&self.client)

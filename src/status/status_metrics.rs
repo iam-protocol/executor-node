@@ -5,7 +5,7 @@ pub struct StatusMetrics {
     total_verifications_relayed: AtomicU64,
     total_attestations_issued: AtomicU64,
     total_validations_performed: AtomicU64,
-    /// Per-IP rate-limiter rejections (master-list #155). Increments on
+    /// Per-IP rate-limiter rejections. Increments on
     /// every 429 emitted by `per_ip_rate_limit_middleware`. Surfaced via
     /// the unauthenticated `/metrics` endpoint as a Prometheus counter so
     /// ops can monitor sustained-attack signals without log scraping.

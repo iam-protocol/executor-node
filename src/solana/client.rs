@@ -16,13 +16,13 @@ const MAX_RETRIES: usize = 3;
 const INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 
-/// Cap on the signature-history window for observe-only reputation reads
-/// (#196, D1). 100 is plenty to distinguish a fresh wallet (≈0 signatures) from
+/// Cap on the signature-history window for observe-only reputation reads.
+/// 100 is plenty to distinguish a fresh wallet (≈0 signatures) from
 /// one with real history, while keeping the RPC response small — avoiding the
 /// ~1000-entry default for active wallets on a per-verification path.
 const RECENT_SIGNATURE_WINDOW: usize = 100;
 
-/// Recent on-chain activity summary for a wallet (#196, D1).
+/// Recent on-chain activity summary for a wallet.
 #[derive(Debug, Clone, Default)]
 pub struct RecentActivity {
     /// Signatures seen in the query window (saturates at `RECENT_SIGNATURE_WINDOW`).
@@ -117,7 +117,7 @@ impl SolanaClient {
         })
     }
 
-    /// Recent on-chain activity for an arbitrary wallet (#196, D1, observe-only):
+    /// Recent on-chain activity for an arbitrary wallet, observe-only:
     /// signature count + the oldest block time in a bounded window. The window
     /// is capped at `RECENT_SIGNATURE_WINDOW` and read at the client's commitment
     /// (matching `get_balance_of`) so the snapshot is internally consistent.

@@ -17,8 +17,8 @@ pub struct AcousticEvaluation {
 /// SDK, so an adversary controlling the client can forge them (a bot simply
 /// reports in-range values). The un-forgeable acoustic check is computed
 /// server-side by the validation service from the raw audio it already
-/// receives; wiring that server-side score into the composite is the tracked
-/// follow-up (remaining-public-tasks.md Item #15). Thresholds below are
+/// receives. Wiring that server-side score into the composite is a tracked
+/// follow-up. Thresholds below are
 /// uncalibrated starting points.
 ///
 /// Physical microphones picking up human speech in ambient room acoustics exhibit:

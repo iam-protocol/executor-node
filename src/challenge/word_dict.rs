@@ -1,4 +1,4 @@
-//! Curated real-word dictionary for phrase content binding (#89 v3).
+//! Curated real-word dictionary for phrase content binding.
 //!
 //! **Source of truth: `entros-validation/src/word_dict.rs`.** This is a
 //! verbatim vendored copy. If this file diverges from the entros-validation

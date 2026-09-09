@@ -1,5 +1,4 @@
-//! Prometheus exposition endpoint for executor metrics (master-list / phases.md
-//! "Monitoring + metrics (Prometheus)" item).
+//! Prometheus exposition endpoint for executor metrics.
 //!
 //! Exposes existing `StatusMetrics` aggregate counters plus uptime in the
 //! standard Prometheus text exposition format. No external crate dependency —
