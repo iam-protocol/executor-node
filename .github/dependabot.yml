@@ -12,3 +12,15 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 2
+    ignore:
+      # The Rust version is pinned in three places that have to move together:
+      # this image, `rust-toolchain.toml`, and the CI workflow. Raising the
+      # image alone builds the container on one compiler and tests on another.
+      # Sibling repositories pin the same version, so the move is decided
+      # across repositories rather than here. Digest updates to the pinned tag
+      # still arrive, because they are not semver updates.
+      - dependency-name: "rust"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
