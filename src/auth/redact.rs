@@ -60,7 +60,7 @@ pub fn redact_wallet_id(wallet: &str) -> String {
 /// zeroed); IPv6 → /48 (only the first three groups kept). The trailing
 /// `/24` or `/48` keeps the redaction shape unambiguous.
 ///
-/// Used by the per-IP rate limiter middleware (master-list #155) so
+/// Used by the per-IP rate limiter middleware so
 /// `RATE_LIMIT: per-IP cap hit` log lines don't become a secondary
 /// source of identifiable client data.
 pub fn redact_ip(ip: IpAddr) -> String {

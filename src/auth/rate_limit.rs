@@ -89,7 +89,7 @@ impl RateLimiter {
     }
 }
 
-/// Per-IP rate limiter (master-list #155). Same governor + DashMap
+/// Per-IP rate limiter. Same governor + DashMap
 /// pattern as `RateLimiter`, but keyed on `IpAddr` and with a larger
 /// `MAX_TRACKED_IPS` cap. Separate type rather than generic so tests
 /// stay simple and the existing per-API-key call sites don't need to

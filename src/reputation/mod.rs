@@ -1,4 +1,4 @@
-//! Observe-only wallet reputation (master-list #196, Layer D1).
+//! Observe-only wallet reputation.
 //!
 //! Reads a verifying wallet's PUBLIC on-chain history and uses it as a risk
 //! PRIOR — the Solana-native analog to a cross-site reputation graph, without

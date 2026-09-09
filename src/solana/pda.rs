@@ -31,7 +31,7 @@ pub fn find_identity_state_pda(user: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"identity", user.as_ref()], &ANCHOR_PROGRAM)
 }
 
-#[allow(dead_code)] // Used in Phase 6 integrator onboarding
+#[allow(dead_code)] // Reserved for integrator onboarding.
 pub fn find_protocol_config_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"protocol_config"], &REGISTRY_PROGRAM)
 }

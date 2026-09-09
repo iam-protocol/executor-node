@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 const MAX_TRACKED_FINGERPRINTS: usize = 50_000;
 
-/// Tracker for cross-wallet cooldown limits (master-list #142).
+/// Tracker for cross-wallet cooldown limits.
 /// Prevents the same client device/subnet footprint from verifying different
 /// wallets in quick succession, mitigating multi-wallet bot farming.
 pub struct CrossWalletCooldownTracker {

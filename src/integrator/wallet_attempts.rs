@@ -1,4 +1,4 @@
-//! Per-wallet validation-attempt counter (master-list #94).
+//! Per-wallet validation-attempt counter.
 //!
 //! Bounds how many times a single wallet can attempt validation within a
 //! sliding window. Pairs with the client-side soft-reject UX in
